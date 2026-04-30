@@ -13,6 +13,9 @@ interface Props {
     column?: ColumnConfig;
     onExpand: () => void;
     onCitationClick?: (page: number, quote: string) => void;
+    /** When true, cells expand vertically and content wraps instead of being
+     *  truncated to a single line. */
+    wrapText?: boolean;
 }
 
 const FLAG_STYLES = {
@@ -151,6 +154,7 @@ export function TabularCell({
     column,
     onExpand,
     onCitationClick,
+    wrapText = false,
 }: Props) {
     const [inlineExpanded, setInlineExpanded] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -211,7 +215,7 @@ export function TabularCell({
         <div ref={containerRef} className="relative">
             {/* Normal cell row — always visible, preserves table layout */}
             <div
-                className="group relative h-10 px-2 flex items-center text-xs text-gray-800 leading-relaxed cursor-pointer hover:bg-gray-50 transition-colors"
+                className={`group relative px-2 ${wrapText ? "py-2 min-h-10" : "h-10 flex items-center"} text-xs text-gray-800 leading-relaxed cursor-pointer hover:bg-gray-50 transition-colors`}
                 onClick={() => setInlineExpanded((v) => !v)}
             >
                 {cell.content.flag && (
@@ -220,7 +224,9 @@ export function TabularCell({
                         title={cell.content.flag}
                     />
                 )}
-                <div className="line-clamp-1 w-full min-w-0">
+                <div
+                    className={`w-full min-w-0 ${wrapText ? "whitespace-pre-wrap break-words" : "line-clamp-1"}`}
+                >
                     <CellMarkdown
                         text={collapsedDisplay}
                         citations={citations}

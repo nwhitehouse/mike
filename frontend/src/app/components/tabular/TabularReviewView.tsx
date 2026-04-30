@@ -2,7 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Loader2, Play, ChevronDown, MessageSquare, Download, Users } from "lucide-react";
+import {
+    Plus,
+    Loader2,
+    Play,
+    ChevronDown,
+    MessageSquare,
+    Download,
+    Users,
+    WrapText,
+} from "lucide-react";
 import { HeaderSearchBtn } from "../shared/HeaderSearchBtn";
 
 import {
@@ -83,6 +92,7 @@ export function TRView({ reviewId, projectId }: Props) {
     );
     const [highlightedCell, setHighlightedCell] = useState<{ colIdx: number; rowIdx: number } | null>(null);
     const [docDetailDocId, setDocDetailDocId] = useState<string | null>(null);
+    const [wrapText, setWrapText] = useState(false);
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);
     const actionsRef = useRef<HTMLDivElement>(null);
@@ -643,6 +653,18 @@ export function TRView({ reviewId, projectId }: Props) {
                         <MessageSquare className="h-3.5 w-3.5" />
                         Assistant in Tabular Review
                     </button>
+                    <button
+                        onClick={() => setWrapText((v) => !v)}
+                        title={wrapText ? "Unwrap text" : "Wrap text"}
+                        className={`flex items-center gap-1 text-xs font-medium transition-colors ${
+                            wrapText
+                                ? "text-gray-900"
+                                : "text-gray-500 hover:text-gray-900"
+                        }`}
+                    >
+                        <WrapText className="h-3.5 w-3.5" />
+                        {wrapText ? "Unwrap text" : "Wrap text"}
+                    </button>
                     <div className="ml-auto flex items-center gap-4">
                         {selectedDocIds.length > 0 && (
                             <div ref={actionsRef} className="relative">
@@ -739,9 +761,15 @@ export function TRView({ reviewId, projectId }: Props) {
                         }}
                         onUpdateColumn={handleUpdateColumn}
                         onDeleteColumn={handleDeleteColumn}
+                        onReorderColumns={(next) => {
+                            // Optimistic update + persist via existing saver.
+                            setColumns(next);
+                            saveColumnsConfig(next);
+                        }}
                         onAddColumn={() => setAddColOpen(true)}
                         onAddDocuments={() => setAddDocsOpen(true)}
                         onDocumentClick={(docId) => setDocDetailDocId(docId)}
+                        wrapText={wrapText}
                     />
                 </div>
             </div>

@@ -1,7 +1,13 @@
 "use client";
 
-import { forwardRef, useImperativeHandle, useRef } from "react";
-import { Plus, Table2 } from "lucide-react";
+import {
+    forwardRef,
+    useCallback,
+    useImperativeHandle,
+    useRef,
+    useState,
+} from "react";
+import { GripVertical, Plus, Table2 } from "lucide-react";
 import type { ColumnConfig, MikeDocument, TabularCell } from "../shared/types";
 import { TabularCell as TabularCellComponent } from "./TabularCell";
 import { TREditColumnMenu } from "./TREditColumnMenu";
@@ -9,14 +15,14 @@ import { TREditColumnMenu } from "./TREditColumnMenu";
 const SKELETON_COLS = 4;
 const SKELETON_ROWS = 5;
 
-const COL_W = "w-[300px] shrink-0";
-const CHECK_W = "w-8 shrink-0";
-
-// Pixel widths matching the CSS constants above
 const CHECK_W_PX = 32; // w-8 = 2rem = 32px
 const DOC_COL_W_PX = 300;
-const DATA_COL_W_PX = 300;
+const DEFAULT_DATA_COL_W_PX = 300;
+const MIN_DATA_COL_W_PX = 120;
 const STICKY_LEFT_PX = CHECK_W_PX + DOC_COL_W_PX; // 332px
+
+const CHECK_W = "w-8 shrink-0";
+const DOC_COL_W = "w-[300px] shrink-0";
 
 export interface TRTableHandle {
     scrollToCell: (colIdx: number, rowIdx: number) => void;
@@ -31,11 +37,13 @@ interface Props {
     savingColumnsConfig: boolean;
     selectedDocIds: string[];
     highlightedCell?: { colIdx: number; rowIdx: number } | null;
+    wrapText?: boolean;
     onSelectionChange: (ids: string[]) => void;
     onExpand: (cell: TabularCell) => void;
     onCitationClick: (cell: TabularCell, page: number, quote: string) => void;
     onUpdateColumn: (col: ColumnConfig) => void;
     onDeleteColumn: (colIndex: number) => void;
+    onReorderColumns?: (newColumns: ColumnConfig[]) => void;
     onAddColumn: () => void;
     onAddDocuments: () => void;
     onDocumentClick?: (docId: string) => void;
@@ -51,11 +59,13 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         savingColumnsConfig,
         selectedDocIds,
         highlightedCell,
+        wrapText = false,
         onSelectionChange,
         onExpand,
         onCitationClick,
         onUpdateColumn,
         onDeleteColumn,
+        onReorderColumns,
         onAddColumn,
         onAddDocuments,
         onDocumentClick,
@@ -63,16 +73,42 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
     ref,
 ) {
     const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const sortedColumns = [...columns].sort((a, b) => a.index - b.index);
+
+    // Per-column width override (keyed by column.index, the stable id).
+    // Falls back to DEFAULT_DATA_COL_W_PX. Local state — not persisted.
+    const [columnWidths, setColumnWidths] = useState<Record<number, number>>(
+        {},
+    );
+    const widthOf = (colIdx: number) =>
+        columnWidths[colIdx] ?? DEFAULT_DATA_COL_W_PX;
+
+    // Display order is the array order (no implicit sort by index) so that
+    // drag-reorder mutations show up immediately. Cell lookups still use
+    // each column's stable .index value, so reordering is purely visual.
+    const displayColumns = columns;
+
+    // Drag-to-reorder state
+    const [dragSourceIdx, setDragSourceIdx] = useState<number | null>(null);
+    const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+    // Column resize state — uses a ref so listeners read fresh values.
+    const resizeRef = useRef<{
+        colIndex: number;
+        startX: number;
+        startWidth: number;
+    } | null>(null);
+
     const totalContentWidth =
-        CHECK_W_PX + DOC_COL_W_PX + sortedColumns.length * DATA_COL_W_PX + 32;
+        CHECK_W_PX +
+        DOC_COL_W_PX +
+        displayColumns.reduce((sum, c) => sum + widthOf(c.index), 0) +
+        32;
 
     useImperativeHandle(ref, () => ({
         scrollToCell(colIdx: number, rowIdx: number) {
             const container = scrollContainerRef.current;
             if (!container) return;
 
-            // Vertical: find actual row via DOM (handles variable row heights)
             const allRows = container.querySelectorAll<HTMLElement>(
                 ":scope > div.flex.min-w-full",
             );
@@ -84,12 +120,18 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                 });
             }
 
-            // Horizontal: fixed column widths — center the target column in view
+            // Compute horizontal offset from per-column widths (no longer
+            // a uniform DATA_COL_W_PX).
+            let offset = STICKY_LEFT_PX;
+            for (let i = 0; i < colIdx && i < displayColumns.length; i++) {
+                offset += widthOf(displayColumns[i].index);
+            }
+            const targetWidth =
+                colIdx < displayColumns.length
+                    ? widthOf(displayColumns[colIdx].index)
+                    : DEFAULT_DATA_COL_W_PX;
             const targetScrollLeft =
-                STICKY_LEFT_PX +
-                colIdx * DATA_COL_W_PX -
-                container.clientWidth / 2 +
-                DATA_COL_W_PX / 2;
+                offset - container.clientWidth / 2 + targetWidth / 2;
             container.scrollLeft = Math.max(0, targetScrollLeft);
         },
     }));
@@ -107,11 +149,8 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         !allSelected && documents.some((d) => selectedDocIds.includes(d.id));
 
     function toggleAll() {
-        if (allSelected) {
-            onSelectionChange([]);
-        } else {
-            onSelectionChange(documents.map((d) => d.id));
-        }
+        if (allSelected) onSelectionChange([]);
+        else onSelectionChange(documents.map((d) => d.id));
     }
 
     function toggleDoc(id: string) {
@@ -122,41 +161,107 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         }
     }
 
+    // ---- Column resize ------------------------------------------------------
+    const handleResizeMouseMove = useCallback((e: MouseEvent) => {
+        const r = resizeRef.current;
+        if (!r) return;
+        const next = Math.max(
+            MIN_DATA_COL_W_PX,
+            r.startWidth + (e.clientX - r.startX),
+        );
+        setColumnWidths((prev) => ({ ...prev, [r.colIndex]: next }));
+    }, []);
+
+    const handleResizeMouseUp = useCallback(() => {
+        resizeRef.current = null;
+        document.removeEventListener("mousemove", handleResizeMouseMove);
+        document.removeEventListener("mouseup", handleResizeMouseUp);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+    }, [handleResizeMouseMove]);
+
+    function startColumnResize(e: React.MouseEvent, colIndex: number) {
+        e.preventDefault();
+        e.stopPropagation();
+        resizeRef.current = {
+            colIndex,
+            startX: e.clientX,
+            startWidth: widthOf(colIndex),
+        };
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+        document.addEventListener("mousemove", handleResizeMouseMove);
+        document.addEventListener("mouseup", handleResizeMouseUp);
+    }
+
+    // ---- Column drag-to-reorder --------------------------------------------
+    function handleDragStart(e: React.DragEvent, fromIdx: number) {
+        if (!onReorderColumns) return;
+        setDragSourceIdx(fromIdx);
+        e.dataTransfer.effectAllowed = "move";
+        // Some browsers require setData to enable the drag.
+        e.dataTransfer.setData("text/plain", String(fromIdx));
+    }
+
+    function handleDragOver(e: React.DragEvent, overIdx: number) {
+        if (!onReorderColumns || dragSourceIdx === null) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        if (overIdx !== dragOverIdx) setDragOverIdx(overIdx);
+    }
+
+    function handleDrop(e: React.DragEvent, targetIdx: number) {
+        if (!onReorderColumns) return;
+        e.preventDefault();
+        const sourceIdx = dragSourceIdx;
+        setDragSourceIdx(null);
+        setDragOverIdx(null);
+        if (sourceIdx === null || sourceIdx === targetIdx) return;
+        const next = [...displayColumns];
+        const [moved] = next.splice(sourceIdx, 1);
+        next.splice(targetIdx, 0, moved);
+        onReorderColumns(next);
+    }
+
+    function handleDragEnd() {
+        setDragSourceIdx(null);
+        setDragOverIdx(null);
+    }
+
+    // ---- Skeleton / empty states -------------------------------------------
     if (loading) {
         return (
             <div className="flex-1 overflow-hidden">
-                {/* Header */}
                 <div className="flex border-b border-gray-200">
                     <div
                         className={`${CHECK_W} border-r border-gray-200 p-2`}
                     />
                     <div
-                        className={`${COL_W} border-r border-gray-200 p-2 text-xs font-medium text-gray-500`}
+                        className={`${DOC_COL_W} border-r border-gray-200 p-2 text-xs font-medium text-gray-500`}
                     >
                         Document
                     </div>
                     {Array.from({ length: SKELETON_COLS }).map((_, i) => (
                         <div
                             key={i}
-                            className={`${COL_W} border-r border-gray-200 p-2`}
+                            className={`${DOC_COL_W} border-r border-gray-200 p-2`}
                         >
                             <div className="h-4 w-28 rounded bg-gray-100 animate-pulse" />
                         </div>
                     ))}
                     <div className="flex-1" />
                 </div>
-                {/* Rows */}
                 {Array.from({ length: SKELETON_ROWS }).map((_, row) => (
                     <div
                         key={row}
                         className={`flex border-b border-gray-50 ${row % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}
                     >
                         <div className={`${CHECK_W} p-2`} />
-                        <div className={`${COL_W} p-2`}>
+                        <div className={`${DOC_COL_W} p-2`}>
                             <div className="h-4 w-32 rounded bg-gray-100 animate-pulse" />
                         </div>
                         {Array.from({ length: SKELETON_COLS }).map((_, col) => (
-                            <div key={col} className={`${COL_W} p-2`}>
+                            <div key={col} className={`${DOC_COL_W} p-2`}>
                                 <div className="h-4 rounded bg-gray-100 animate-pulse" />
                             </div>
                         ))}
@@ -173,7 +278,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                 <div className="flex items-center border-b border-gray-200">
                     <div className={`${CHECK_W} border-r border-gray-200`} />
                     <div
-                        className={`${COL_W} border-r border-gray-200 p-2 text-xs font-medium text-gray-500 select-none`}
+                        className={`${DOC_COL_W} border-r border-gray-200 p-2 text-xs font-medium text-gray-500 select-none`}
                     >
                         Document
                     </div>
@@ -228,26 +333,66 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                     />
                 </div>
                 <div
-                    className={`sticky left-8 z-30 ${COL_W} bg-white border-b border-r border-gray-200 p-2 text-left text-xs font-medium text-gray-500 select-none`}
+                    className={`sticky left-8 z-30 ${DOC_COL_W} bg-white border-b border-r border-gray-200 p-2 text-left text-xs font-medium text-gray-500 select-none`}
                 >
                     Document
                 </div>
-                {columns.map((col) => (
-                    <div
-                        key={col.index}
-                        className={`${COL_W} border-b border-r border-gray-200 p-2 text-left text-xs font-medium text-gray-500 select-none`}
-                    >
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="truncate">{col.name}</span>
-                            <TREditColumnMenu
-                                column={col}
-                                disabled={savingColumn || savingColumnsConfig}
-                                onSave={onUpdateColumn}
-                                onDelete={onDeleteColumn}
+                {displayColumns.map((col, displayIdx) => {
+                    const isDraggingThis = dragSourceIdx === displayIdx;
+                    const isDragTarget =
+                        dragOverIdx === displayIdx &&
+                        dragSourceIdx !== null &&
+                        dragSourceIdx !== displayIdx;
+                    return (
+                        <div
+                            key={col.index}
+                            draggable={!!onReorderColumns}
+                            onDragStart={(e) =>
+                                handleDragStart(e, displayIdx)
+                            }
+                            onDragOver={(e) => handleDragOver(e, displayIdx)}
+                            onDrop={(e) => handleDrop(e, displayIdx)}
+                            onDragEnd={handleDragEnd}
+                            style={{
+                                width: widthOf(col.index),
+                                flexShrink: 0,
+                            }}
+                            className={`relative border-b border-r border-gray-200 p-2 text-left text-xs font-medium text-gray-500 select-none transition-colors ${
+                                isDraggingThis ? "opacity-40" : ""
+                            } ${isDragTarget ? "bg-blue-50" : ""}`}
+                        >
+                            <div className="flex items-center gap-2 pr-2">
+                                {onReorderColumns && (
+                                    <GripVertical
+                                        className="h-3 w-3 shrink-0 text-gray-300 cursor-grab active:cursor-grabbing"
+                                        aria-label="Drag to reorder"
+                                    />
+                                )}
+                                <span className="truncate flex-1">
+                                    {col.name}
+                                </span>
+                                <TREditColumnMenu
+                                    column={col}
+                                    disabled={
+                                        savingColumn || savingColumnsConfig
+                                    }
+                                    onSave={onUpdateColumn}
+                                    onDelete={onDeleteColumn}
+                                />
+                            </div>
+                            {/* Right-edge resize handle. Sits on top of the
+                                border so the cursor turns into col-resize on
+                                hover. Mousedown starts a drag-to-resize. */}
+                            <div
+                                onMouseDown={(e) =>
+                                    startColumnResize(e, col.index)
+                                }
+                                className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-blue-400/30 active:bg-blue-400/50 z-10"
+                                title="Drag to resize column"
                             />
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
                 <div className="flex-1 border-b border-gray-200 flex items-center justify-start p-2 min-w-8">
                     <button
                         onClick={onAddColumn}
@@ -283,7 +428,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                             />
                         </div>
                         <div
-                            className={`sticky left-8 z-[60] ${COL_W} border-b border-r border-gray-200 p-2 text-xs text-gray-800 flex items-center ${rowBg}`}
+                            className={`sticky left-8 z-[60] ${DOC_COL_W} border-b border-r border-gray-200 p-2 text-xs text-gray-800 flex items-center ${rowBg}`}
                         >
                             {onDocumentClick ? (
                                 <button
@@ -295,28 +440,33 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                     {doc.filename}
                                 </button>
                             ) : (
-                                <span className="line-clamp-1" title={doc.filename}>
+                                <span
+                                    className="line-clamp-1"
+                                    title={doc.filename}
+                                >
                                     {doc.filename}
                                 </span>
                             )}
                         </div>
-                        {columns.map((col) => {
+                        {displayColumns.map((col, displayIdx) => {
                             const cell = getCell(doc.id, col.index);
-                            const colPos = sortedColumns.findIndex(
-                                (c) => c.index === col.index,
-                            );
                             const isHighlighted =
-                                highlightedCell?.colIdx === colPos &&
+                                highlightedCell?.colIdx === displayIdx &&
                                 highlightedCell?.rowIdx === docIdx;
                             return (
                                 <div
                                     key={col.index}
-                                    className={`${COL_W} border-b border-r border-gray-200 transition-colors ${isHighlighted ? "bg-blue-200" : ""}`}
+                                    style={{
+                                        width: widthOf(col.index),
+                                        flexShrink: 0,
+                                    }}
+                                    className={`border-b border-r border-gray-200 transition-colors ${isHighlighted ? "bg-blue-200" : ""}`}
                                 >
                                     {cell && (
                                         <TabularCellComponent
                                             cell={cell}
                                             column={col}
+                                            wrapText={wrapText}
                                             onExpand={() => onExpand(cell)}
                                             onCitationClick={(page, quote) =>
                                                 onCitationClick(

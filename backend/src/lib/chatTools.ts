@@ -103,7 +103,7 @@ DOCX GENERATION:
 If asked to draft or generate a document, use the generate_docx tool to produce a downloadable Word document. Always use this tool rather than just displaying the document content inline when the user asks for a document to be created.
 If the user follows up on a document you just generated and asks for changes (e.g. "make section 3 longer", "add a termination clause", "change the parties"), default to calling edit_document on that newly generated document — do NOT call generate_docx again to regenerate the whole document. Only fall back to generate_docx if the user explicitly asks for a brand-new document or the change is so sweeping that an edit would not be coherent.
 After calling generate_docx, do NOT include any download links, URLs, or markdown links to the document in your prose response — the download card is presented automatically by the UI. Do not describe formatting choices such as orientation or layout.
-After calling generate_docx, you MUST call read_document on the returned doc_id before writing your prose response. Base your description on the generated document's actual text, not on memory of what you intended to generate.
+After calling generate_docx, you MAY call read_document on the returned doc_id if you genuinely need to verify the rendered output before writing your prose response. Skip this read for routine drafts — base the prose on what you just generated. If you do read the document and notice imperfections (numbering quirks, redundant prefixes, formatting nits), DO NOT call generate_docx again to fix them. Either describe the issue plainly to the user and let them request adjustments, or — for small targeted corrections — call edit_document. Re-issuing generate_docx in the same turn produces duplicate downloads in the chat and frustrates the user.
 Your prose response MUST include a short description of the generated document: what it is, its structure (key sections/clauses), and — if the draft was informed by any provided source documents — which sources you drew from and how. Keep it concise (typically 3–8 sentences or a short bulleted list). Refer to the document by filename, never by a download link.
 When the description makes factual claims about the contents of the newly generated document, cite the generated document with [N] markers and a <CITATIONS> block exactly as specified in the DOCUMENT CITATION INSTRUCTIONS above. If you also make factual claims about provided source documents, cite those source documents separately. In every citation entry, use the exact chat-local doc_id label for the cited document. Omit the <CITATIONS> block if the description makes no such claims.
 Heading hierarchy: always use Heading 1 before introducing Heading 2, Heading 2 before Heading 3, and so on. Never skip levels (e.g. do not jump from Heading 1 to Heading 3).
@@ -682,6 +682,42 @@ export async function generateDocx(
         } = await import("docx");
 
         const FONT = "Times New Roman";
+
+        // Lightweight markdown-bold parser: splits a string on **...** spans
+        // and emits a TextRun per segment with bold=true on the bolded
+        // pieces. The model often emits markdown inside section.content
+        // (e.g. **Burger Co.**) and the docx writer treats it as literal
+        // text otherwise. Only handles bold; intentionally skips italic
+        // because single-asterisk italics collide with bold delimiters.
+        type RunStyle = { font: string; size: number; bold?: boolean };
+        function buildRuns(text: string, base: RunStyle) {
+            const runs: InstanceType<typeof TextRun>[] = [];
+            const re = /\*\*([^*]+?)\*\*/g;
+            let lastIdx = 0;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text)) !== null) {
+                if (m.index > lastIdx) {
+                    runs.push(
+                        new TextRun({
+                            text: text.slice(lastIdx, m.index),
+                            ...base,
+                        }),
+                    );
+                }
+                runs.push(
+                    new TextRun({ text: m[1], ...base, bold: true }),
+                );
+                lastIdx = m.index + m[0].length;
+            }
+            if (lastIdx < text.length) {
+                runs.push(
+                    new TextRun({ text: text.slice(lastIdx), ...base }),
+                );
+            }
+            if (runs.length === 0)
+                runs.push(new TextRun({ text, ...base }));
+            return runs;
+        }
         const SIZE = 22; // 11pt in half-points
 
         type DocChild = InstanceType<typeof Paragraph> | InstanceType<typeof Table>;
@@ -810,14 +846,20 @@ export async function generateDocx(
                             new Paragraph({
                                 bullet: { level: 0 },
                                 spacing: { after: 120 },
-                                children: [new TextRun({ text: bulletMatch[1], font: FONT, size: SIZE })],
+                                children: buildRuns(bulletMatch[1], {
+                                    font: FONT,
+                                    size: SIZE,
+                                }),
                             }),
                         );
                     } else {
                         children.push(
                             new Paragraph({
                                 spacing: { after: 120 },
-                                children: [new TextRun({ text: trimmed, font: FONT, size: SIZE })],
+                                children: buildRuns(trimmed, {
+                                    font: FONT,
+                                    size: SIZE,
+                                }),
                             }),
                         );
                     }
