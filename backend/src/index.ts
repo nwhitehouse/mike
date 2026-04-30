@@ -13,9 +13,32 @@ import { downloadsRouter } from "./routes/downloads";
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
+// Origin allowlist:
+//  - FRONTEND_URL (the production domain — Vercel custom domain or *.vercel.app)
+//  - Any *.vercel.app subdomain (so Vercel preview deploys per PR also work)
+//  - Localhost on the dev port (and 3000 as a fallback for npm dev defaults)
+// Origin function gives us multi-origin support without rewriting on each
+// new preview URL.
+const allowedOrigins = new Set<string>([
+  process.env.FRONTEND_URL ?? "http://localhost:9000",
+  "http://localhost:9000",
+  "http://localhost:3000",
+]);
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL ?? "http://localhost:3000",
+    origin: (origin, cb) => {
+      // Same-origin / curl / server-to-server has no Origin header — allow.
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.has(origin)) return cb(null, true);
+      // Vercel preview URLs: finch-<branch>-<hash>.vercel.app
+      try {
+        const host = new URL(origin).hostname;
+        if (host.endsWith(".vercel.app")) return cb(null, true);
+      } catch {
+        /* fall through to deny */
+      }
+      cb(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
   }),
 );

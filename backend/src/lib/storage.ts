@@ -19,9 +19,12 @@ import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 function getClient(): S3Client {
   return new S3Client({
-    region: "auto",
+    // Cloudflare R2 accepts "auto"; Supabase Storage / MinIO want a real
+    // region (e.g. "us-west-2"). Default to "auto" so existing R2 deploys
+    // keep working; set R2_REGION explicitly for Supabase / MinIO.
+    region: process.env.R2_REGION ?? "auto",
     endpoint: process.env.R2_ENDPOINT_URL!,
-    // Path-style addressing — required by MinIO, accepted by R2.
+    // Path-style addressing — required by MinIO and Supabase, accepted by R2.
     forcePathStyle: true,
     credentials: {
       accessKeyId: process.env.R2_ACCESS_KEY_ID!,

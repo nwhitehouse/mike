@@ -51,6 +51,12 @@ export default function SignupPage() {
             const { data, error } = await supabase.auth.signUp({
                 email,
                 password,
+                options: {
+                    // After clicking the confirmation link in their inbox,
+                    // bring users back to whichever host they signed up on
+                    // (Vercel preview, custom domain, localhost dev).
+                    emailRedirectTo: window.location.origin,
+                },
             });
 
             if (error) throw error;
