@@ -615,6 +615,67 @@ tabularRouter.post("/:reviewId/clear-cells", requireAuth, async (req, res) => {
     res.status(204).send();
 });
 
+// PATCH /tabular-review/:reviewId/cells
+// Manually edit a single cell's content (summary / reasoning / flag).
+// Sets status to "done".
+tabularRouter.patch(
+    "/:reviewId/cells",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { reviewId } = req.params;
+        const { document_id, column_index, content } = req.body as {
+            document_id?: string;
+            column_index?: number;
+            content?: { summary?: string; reasoning?: string; flag?: string };
+        };
+
+        if (!document_id || column_index == null || !content) {
+            return void res.status(400).json({
+                detail: "document_id, column_index, content are required",
+            });
+        }
+
+        const db = createServerSupabase();
+        const { data: review, error: reviewError } = await db
+            .from("tabular_reviews")
+            .select("*")
+            .eq("id", reviewId)
+            .single();
+        if (reviewError || !review)
+            return void res.status(404).json({ detail: "Review not found" });
+        const access = await ensureReviewAccess(review, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Review not found" });
+
+        const validFlags = ["green", "grey", "yellow", "red"] as const;
+        const next = {
+            summary: typeof content.summary === "string" ? content.summary : "",
+            flag:
+                typeof content.flag === "string" &&
+                (validFlags as readonly string[]).includes(content.flag)
+                    ? content.flag
+                    : "grey",
+            reasoning:
+                typeof content.reasoning === "string" ? content.reasoning : "",
+        };
+
+        const { error } = await db
+            .from("tabular_cells")
+            .update({
+                content: JSON.stringify(next),
+                status: "done",
+            })
+            .eq("review_id", reviewId)
+            .eq("document_id", document_id)
+            .eq("column_index", column_index);
+        if (error) return void res.status(500).json({ detail: error.message });
+
+        res.json({ ok: true, content: next });
+    },
+);
+
 // POST /tabular-review/:reviewId/regenerate-cell
 tabularRouter.post(
     "/:reviewId/regenerate-cell",
@@ -1052,7 +1113,7 @@ function buildTabularMessages(
         .map((c, i) => `- COL:${i} "${c.name}"`)
         .join("\n");
 
-    const systemContent = `You are Mike, an AI legal assistant. You are helping with the tabular review titled "${reviewTitle}".
+    const systemContent = `You are Finch, an AI legal assistant. You are helping with the tabular review titled "${reviewTitle}".
 
 The review extracts specific fields from multiple legal documents into a structured table.
 You do NOT have the cell content yet — call read_table_cells to fetch the cells you need before answering.

@@ -717,6 +717,34 @@ export async function clearTabularCells(
     });
 }
 
+export async function updateTabularCell(
+    reviewId: string,
+    documentId: string,
+    columnIndex: number,
+    content: {
+        summary: string;
+        reasoning: string;
+        flag?: "green" | "grey" | "yellow" | "red";
+    },
+): Promise<{
+    ok: boolean;
+    content: {
+        summary: string;
+        flag: "green" | "grey" | "yellow" | "red";
+        reasoning: string;
+    };
+}> {
+    return apiRequest(`/tabular-review/${reviewId}/cells`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            document_id: documentId,
+            column_index: columnIndex,
+            content,
+        }),
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Workflows
 // ---------------------------------------------------------------------------

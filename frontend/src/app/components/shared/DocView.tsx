@@ -491,11 +491,19 @@ export function DocView({
         return () => clearTimeout(timer);
     }, [containerWidth, renderPDF]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Re-highlight when quotes change without full re-render
+    // Re-highlight when quotes change without full re-render. Clearing
+    // also matters: an empty quote list means the caller wants prior
+    // highlights gone (e.g. the host swapped to a search-driven highlight
+    // path). Bailing without clearing would leave stale highlights on
+    // screen and conflict with the new highlighting layer.
     useEffect(() => {
         if (!pdfDocRef.current) return;
         quoteListRef.current = quoteList;
-        if (quoteList.length === 0) return;
+        if (quoteList.length === 0) {
+            for (const p of renderedPagesRef.current)
+                clearHighlights(p.textDivs);
+            return;
+        }
         rehighlightQuotes(quoteList);
     }, [quoteKey, rehighlightQuotes]); // eslint-disable-line react-hooks/exhaustive-deps
 

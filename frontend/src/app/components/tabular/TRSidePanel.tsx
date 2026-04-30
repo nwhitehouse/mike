@@ -318,7 +318,7 @@ export function TRSidePanel({
 // Markdown renderer
 // ---------------------------------------------------------------------------
 
-function CitationBadge({
+export function CitationBadge({
     index,
     citation,
     onClick,
@@ -343,7 +343,7 @@ function CitationBadge({
     );
 }
 
-function MarkdownContent({
+export function MarkdownContent({
     children,
     citations,
     onCitationClick,

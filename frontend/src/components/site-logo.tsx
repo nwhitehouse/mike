@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { MikeIcon } from "@/components/chat/mike-icon";
 
 interface SiteLogoProps {
     size?: "sm" | "md" | "lg" | "xl";
@@ -38,8 +37,14 @@ export function SiteLogo({
                 animate ? "sidebar-fade-in" : ""
             } ${className}`}
         >
-            <MikeIcon size={iconSizes[size]} />
-            <span>Mike</span>
+            <img
+                src="/onit-mark-dark.svg"
+                alt=""
+                width={iconSizes[size]}
+                height={iconSizes[size]}
+                style={{ display: "block" }}
+            />
+            <span>Finch</span>
         </h1>
     );
 

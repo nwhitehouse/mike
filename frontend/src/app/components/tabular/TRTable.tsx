@@ -38,6 +38,7 @@ interface Props {
     onDeleteColumn: (colIndex: number) => void;
     onAddColumn: () => void;
     onAddDocuments: () => void;
+    onDocumentClick?: (docId: string) => void;
 }
 
 export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
@@ -57,6 +58,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         onDeleteColumn,
         onAddColumn,
         onAddDocuments,
+        onDocumentClick,
     },
     ref,
 ) {
@@ -283,9 +285,20 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                         <div
                             className={`sticky left-8 z-[60] ${COL_W} border-b border-r border-gray-200 p-2 text-xs text-gray-800 flex items-center ${rowBg}`}
                         >
-                            <span className="line-clamp-1" title={doc.filename}>
-                                {doc.filename}
-                            </span>
+                            {onDocumentClick ? (
+                                <button
+                                    type="button"
+                                    onClick={() => onDocumentClick(doc.id)}
+                                    className="line-clamp-1 text-left text-gray-800 hover:text-blue-600 hover:underline cursor-pointer"
+                                    title={`Open ${doc.filename}`}
+                                >
+                                    {doc.filename}
+                                </button>
+                            ) : (
+                                <span className="line-clamp-1" title={doc.filename}>
+                                    {doc.filename}
+                                </span>
+                            )}
                         </div>
                         {columns.map((col) => {
                             const cell = getCell(doc.id, col.index);

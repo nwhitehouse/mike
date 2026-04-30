@@ -3,9 +3,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
-import { MikeIcon } from "@/components/chat/mike-icon";
 import { ChatInput } from "./ChatInput";
 import { SelectAssistantProjectModal } from "./SelectAssistantProjectModal";
+import { getRandomGreeting } from "@/lib/greetings";
 import type { MikeMessage } from "../shared/types";
 
 interface InitialViewProps {
@@ -26,6 +26,9 @@ export function InitialView({ onSubmit }: InitialViewProps) {
 
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
+    // Fix the greeting to a single random pick for the lifetime of this mount
+    // so it doesn't shuffle on every re-render while the user is reading it.
+    const [greeting] = useState(() => getRandomGreeting(username));
 
     useLayoutEffect(() => {
         if (!profile || !textRef.current) return;
@@ -56,11 +59,17 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                                     "transform 900ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
                             }}
                         >
-                            <MikeIcon size={ICON_SIZE} />
+                            <img
+                                src="/onit-mark-dark.svg"
+                                alt=""
+                                width={ICON_SIZE}
+                                height={ICON_SIZE}
+                                style={{ display: "block" }}
+                            />
                         </div>
                         <h1
                             ref={textRef}
-                            className="absolute text-4xl font-serif font-light text-gray-900 whitespace-nowrap"
+                            className="absolute text-3xl font-serif font-light text-gray-900 whitespace-nowrap"
                             style={{
                                 left: "50%",
                                 transform: loaded
@@ -71,7 +80,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                                     "transform 900ms cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 800ms ease-in-out 300ms",
                             }}
                         >
-                            Hi, {username}
+                            {greeting}
                         </h1>
                     </div>
 

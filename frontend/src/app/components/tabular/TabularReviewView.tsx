@@ -39,6 +39,7 @@ import { TRSidePanel } from "./TRSidePanel";
 import { TRTable } from "./TRTable";
 import type { TRTableHandle } from "./TRTable";
 import { TRChatPanel } from "./TRChatPanel";
+import { TRDocDetailView } from "./TRDocDetailView";
 import { exportTabularReviewToExcel } from "./exportToExcel";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 
@@ -81,6 +82,7 @@ export function TRView({ reviewId, projectId }: Props) {
             : null,
     );
     const [highlightedCell, setHighlightedCell] = useState<{ colIdx: number; rowIdx: number } | null>(null);
+    const [docDetailDocId, setDocDetailDocId] = useState<string | null>(null);
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);
     const actionsRef = useRef<HTMLDivElement>(null);
@@ -467,6 +469,31 @@ export function TRView({ reviewId, projectId }: Props) {
         ? documents.filter((d) => d.filename.toLowerCase().includes(q))
         : documents;
 
+    if (docDetailDocId) {
+        return (
+            <div className="flex h-full overflow-hidden bg-white">
+                <div className="flex flex-1 flex-col overflow-hidden">
+                    <TRDocDetailView
+                        reviewId={reviewId}
+                        documentId={docDetailDocId}
+                        documents={documents}
+                        columns={columns}
+                        cells={cells}
+                        onBack={() => setDocDetailDocId(null)}
+                        onChangeDocument={(id) => setDocDetailDocId(id)}
+                        onCellUpdated={(updated) =>
+                            setCells((prev) =>
+                                prev.map((c) =>
+                                    c.id === updated.id ? updated : c,
+                                ),
+                            )
+                        }
+                    />
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="flex h-full overflow-hidden bg-white">
             <div className="flex flex-1 flex-col overflow-hidden">
@@ -714,6 +741,7 @@ export function TRView({ reviewId, projectId }: Props) {
                         onDeleteColumn={handleDeleteColumn}
                         onAddColumn={() => setAddColOpen(true)}
                         onAddDocuments={() => setAddDocsOpen(true)}
+                        onDocumentClick={(docId) => setDocDetailDocId(docId)}
                     />
                 </div>
             </div>
