@@ -20,7 +20,9 @@ export function ApiKeyMissingModal({ open, onClose, provider, message }: Props) 
     const providerName = provider ? providerLabel(provider) : "this provider";
     const body =
         message ??
-        `You haven't added a ${providerName} API key yet. Add one in your account settings to use this model.`;
+        (provider === "olava"
+            ? "Olava is configured server-side. Set OLAVA_BASE_URL and OLAVA_AUTH_TOKEN in the backend .env to enable this model."
+            : `You haven't added a ${providerName} API key yet. Add one in your account settings to use this model.`);
 
     const handleGoToAccount = () => {
         onClose();

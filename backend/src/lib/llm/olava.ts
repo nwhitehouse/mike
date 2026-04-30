@@ -80,7 +80,21 @@ export async function streamOlava(
             stream: true,
             max_tokens: maxTokens(),
         };
-        if (tools.length) body.tools = tools;
+        // vLLM only accepts tools if the server was started with
+        // --enable-auto-tool-choice and --tool-call-parser. Most deployments
+        // don't run with those flags, so by default we drop tools and let the
+        // model reply with plain text. Set OLAVA_ENABLE_TOOLS=true to forward
+        // them when your server supports it.
+        const allowTools =
+            process.env.OLAVA_ENABLE_TOOLS?.toLowerCase() === "true";
+        if (tools.length && allowTools) {
+            body.tools = tools;
+        } else if (tools.length) {
+            console.log(
+                `[olava] dropping ${tools.length} tools — set OLAVA_ENABLE_TOOLS=true ` +
+                    `if your vLLM server is running with --enable-auto-tool-choice.`,
+            );
+        }
 
         const resp = await fetch(endpoint(), {
             method: "POST",
@@ -174,6 +188,14 @@ export async function streamOlava(
                 `reasoning_chars=${reasoningChars} tool_calls=${accCalls.size} ` +
                 `finish_reason=${finishReason ?? "?"}`,
         );
+        // Truncated dump of the actual response text — invaluable when the
+        // model returns very short content (e.g. refusals, malformed tool
+        // attempts, post-strip empties) and we need to see why.
+        if (text.length < 500) {
+            console.log(`[olava] text=${JSON.stringify(text)}`);
+        } else {
+            console.log(`[olava] text_head=${JSON.stringify(text.slice(0, 300))}`);
+        }
         if (finishReason === "length") {
             console.warn(
                 `[olava] WARNING: stopped due to max_tokens=${maxTokens()}. ` +
@@ -235,6 +257,15 @@ export async function completeOlavaText(params: {
         messages.push({ role: "system", content: params.systemPrompt });
     messages.push({ role: "user", content: params.user });
 
+    // Reasoning models need a lot of headroom: the chain-of-thought eats
+    // tokens before the answer is produced, and callers tuned for
+    // non-reasoning models tend to pass small caps (e.g. 2048) that aren't
+    // enough. Take the larger of the caller's request and the env default
+    // so we never undershoot the budget the model actually needs.
+    const requestedMax = params.maxTokens ?? 0;
+    const envMax = maxTokens();
+    const effectiveMax = Math.max(requestedMax, envMax);
+
     const resp = await fetch(endpoint(), {
         method: "POST",
         headers: {
@@ -245,7 +276,7 @@ export async function completeOlavaText(params: {
         body: JSON.stringify({
             model: params.model,
             messages,
-            max_tokens: params.maxTokens ?? maxTokens(),
+            max_tokens: effectiveMax,
         }),
     });
     if (!resp.ok) {

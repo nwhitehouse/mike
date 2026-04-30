@@ -30,9 +30,7 @@ export const DEFAULT_MODEL_ID = "gemini-3-flash-preview";
 
 export const ALLOWED_MODEL_IDS = new Set(MODELS.map((m) => m.id));
 
-// Olava is intentionally omitted here — it's a tabular-review-only model and
-// must not appear in the main chat picker.
-const GROUP_ORDER: ModelOption["group"][] = ["Anthropic", "Google"];
+const GROUP_ORDER: ModelOption["group"][] = ["Anthropic", "Google", "Olava"];
 
 interface Props {
     value: string;
