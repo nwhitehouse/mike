@@ -13,6 +13,7 @@ export const GEMINI_MAIN_MODELS = [
 // Mid-tier (used for tabular review) — user picks one in account settings.
 export const CLAUDE_MID_MODELS = ["claude-sonnet-4-6"] as const;
 export const GEMINI_MID_MODELS = ["gemini-3-flash-preview"] as const;
+export const OLAVA_MID_MODELS = ["olava-extract"] as const;
 
 // Low-tier (used for title generation, lightweight extractions) — user picks
 // one in account settings.
@@ -28,6 +29,7 @@ const ALL_MODELS = new Set<string>([
     ...GEMINI_MAIN_MODELS,
     ...CLAUDE_MID_MODELS,
     ...GEMINI_MID_MODELS,
+    ...OLAVA_MID_MODELS,
     ...CLAUDE_LOW_MODELS,
     ...GEMINI_LOW_MODELS,
 ]);
@@ -39,6 +41,7 @@ const ALL_MODELS = new Set<string>([
 export function providerForModel(model: string): Provider {
     if (model.startsWith("claude")) return "claude";
     if (model.startsWith("gemini")) return "gemini";
+    if (model.startsWith("olava")) return "olava";
     throw new Error(`Unknown model id: ${model}`);
 }
 

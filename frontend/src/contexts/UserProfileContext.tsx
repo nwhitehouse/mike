@@ -11,6 +11,12 @@ import React, {
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 
+interface ServerKeyFlags {
+    claude: boolean;
+    gemini: boolean;
+    olava: boolean;
+}
+
 interface UserProfile {
     displayName: string | null;
     organisation: string | null;
@@ -21,6 +27,22 @@ interface UserProfile {
     tabularModel: string;
     claudeApiKey: string | null;
     geminiApiKey: string | null;
+    serverKeys: ServerKeyFlags | null;
+}
+
+const API_BASE_URL =
+    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+
+async function fetchServerKeys(): Promise<ServerKeyFlags | null> {
+    try {
+        const r = await fetch(`${API_BASE_URL}/user/server-keys`, {
+            cache: "no-store",
+        });
+        if (!r.ok) return null;
+        return (await r.json()) as ServerKeyFlags;
+    } catch {
+        return null;
+    }
 }
 
 interface UserProfileContextType {
@@ -51,11 +73,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     const loadProfile = useCallback(async (userId: string) => {
         try {
-            const { data, error } = await supabase
-                .from("user_profiles")
-                .select("*")
-                .eq("user_id", userId)
-                .single();
+            const [{ data, error }, serverKeys] = await Promise.all([
+                supabase
+                    .from("user_profiles")
+                    .select("*")
+                    .eq("user_id", userId)
+                    .single(),
+                fetchServerKeys(),
+            ]);
 
             // Define credit limit constant
             const MONTHLY_CREDIT_LIMIT = 999999; // temporarily unlimited
@@ -77,6 +102,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     tabularModel: "gemini-3-flash-preview",
                     claudeApiKey: null,
                     geminiApiKey: null,
+                    serverKeys,
                 });
                 return;
             }
@@ -111,6 +137,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                         data.tabular_model || "gemini-3-flash-preview",
                     claudeApiKey: data.claude_api_key ?? null,
                     geminiApiKey: data.gemini_api_key ?? null,
+                    serverKeys,
                 });
 
                 // 2. Update database in background if needed
@@ -148,6 +175,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 tabularModel: "gemini-3-flash-preview",
                 claudeApiKey: null,
                 geminiApiKey: null,
+                serverKeys: null,
             });
         } finally {
             setLoading(false);

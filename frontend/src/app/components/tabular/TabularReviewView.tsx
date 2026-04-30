@@ -90,6 +90,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const apiKeys = {
         claudeApiKey: profile?.claudeApiKey ?? null,
         geminiApiKey: profile?.geminiApiKey ?? null,
+        serverKeys: profile?.serverKeys ?? null,
     };
     const tabularModel = profile?.tabularModel ?? "gemini-3-flash-preview";
 
