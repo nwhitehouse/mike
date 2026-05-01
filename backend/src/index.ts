@@ -30,10 +30,14 @@ app.use(
       // Same-origin / curl / server-to-server has no Origin header — allow.
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
-      // Vercel preview URLs: olava-<branch>-<hash>.vercel.app
       try {
         const host = new URL(origin).hostname;
+        // Vercel preview URLs: olava-<branch>-<hash>.vercel.app
         if (host.endsWith(".vercel.app")) return cb(null, true);
+        // Production custom domain (apex + any subdomain — covers www).
+        if (host === "tryolava.ai" || host.endsWith(".tryolava.ai")) {
+          return cb(null, true);
+        }
       } catch {
         /* fall through to deny */
       }
