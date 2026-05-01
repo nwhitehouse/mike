@@ -1,2 +1,5 @@
+# aptPkgs is additive — leaves Nixpacks's auto-detected Node.js / npm
+# in place and layers LibreOffice on top via apt. The previous
+# `nixPkgs = ["libreoffice"]` REPLACED the default and broke `npm ci`.
 [phases.setup]
-nixPkgs = ["libreoffice"]
+aptPkgs = ["libreoffice"]
