@@ -10,6 +10,18 @@ import { SiteLogo } from "@/components/site-logo";
 import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
+// Mirrored in backend/migrations/001_email_domain_whitelist.sql — the
+// database trigger is the source of truth; this is a pre-flight UX check
+// so users get instant feedback instead of a round-trip to Supabase.
+const ALLOWED_EMAIL_DOMAINS = ["onit.com", "mccarthyfinch.com", "k1.com"];
+
+function isEmailAllowed(email: string): boolean {
+    const at = email.lastIndexOf("@");
+    if (at === -1) return false;
+    const domain = email.slice(at + 1).trim().toLowerCase();
+    return ALLOWED_EMAIL_DOMAINS.includes(domain);
+}
+
 export default function SignupPage() {
     const router = useRouter();
     const { isAuthenticated, authLoading } = useAuth();
@@ -43,6 +55,14 @@ export default function SignupPage() {
         // Validate password length
         if (password.length < 6) {
             setError("Password must be at least 6 characters");
+            setLoading(false);
+            return;
+        }
+
+        if (!isEmailAllowed(email)) {
+            setError(
+                "Signups are restricted to Onit, McCarthy Finch, and K1 email addresses.",
+            );
             setLoading(false);
             return;
         }
