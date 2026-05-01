@@ -9,8 +9,8 @@ export type ServerKeyFlags = {
 };
 
 export type ApiKeyState = {
-    claudeApiKey: string | null;
-    geminiApiKey: string | null;
+    claudeApiKey?: string | null;
+    geminiApiKey?: string | null;
     serverKeys?: ServerKeyFlags | null;
 };
 

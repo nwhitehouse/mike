@@ -44,7 +44,7 @@ export function SiteLogo({
                 height={iconSizes[size]}
                 style={{ display: "block" }}
             />
-            <span>Finch</span>
+            <span>Olava</span>
         </h1>
     );
 

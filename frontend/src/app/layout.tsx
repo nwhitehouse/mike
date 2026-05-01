@@ -15,7 +15,7 @@ const ebGaramond = EB_Garamond({
 });
 
 export const metadata: Metadata = {
-    title: "Finch - AI Legal Platform",
+    title: "Olava - AI Legal Platform",
     description:
         "AI-powered legal document analysis and contract review platform.",
     icons: {

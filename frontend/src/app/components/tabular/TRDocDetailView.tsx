@@ -110,8 +110,8 @@ export function TRDocDetailView({
     // wrong for search). When a search term is set we suppress the
     // citation prop on DocView (so it clears its own highlights) and
     // walk every text-layer span ourselves, wrapping every occurrence
-    // in <mark.finch-search-match>. Cleanup restores div.textContent
-    // from data-finch-search-orig when the search is cleared.
+    // in <mark.olava-search-match>. Cleanup restores div.textContent
+    // from data-olava-search-orig when the search is cleared.
     const trimmedSearchForEffect = searchTerm.trim();
     useEffect(() => {
         const root = docPaneRef.current;
@@ -119,13 +119,13 @@ export function TRDocDetailView({
 
         function clearAllSearchMarks(rootEl: HTMLElement) {
             const wrapped = rootEl.querySelectorAll<HTMLElement>(
-                "[data-finch-search-orig]",
+                "[data-olava-search-orig]",
             );
             wrapped.forEach((div) => {
-                const orig = div.getAttribute("data-finch-search-orig");
+                const orig = div.getAttribute("data-olava-search-orig");
                 if (orig != null) {
                     div.textContent = orig;
-                    div.removeAttribute("data-finch-search-orig");
+                    div.removeAttribute("data-olava-search-orig");
                 }
             });
         }
@@ -155,12 +155,12 @@ export function TRDocDetailView({
                 const haystack = orig.toLowerCase();
                 let idx = haystack.indexOf(needle);
                 if (idx === -1) return;
-                div.setAttribute("data-finch-search-orig", orig);
+                div.setAttribute("data-olava-search-orig", orig);
                 let html = "";
                 let pos = 0;
                 while (idx !== -1) {
                     html += escapeForHtml(orig.slice(pos, idx));
-                    html += `<mark class="finch-search-match" style="background:rgba(251,191,36,0.4);color:inherit;padding:0;border-radius:2px;">${escapeForHtml(
+                    html += `<mark class="olava-search-match" style="background:rgba(251,191,36,0.4);color:inherit;padding:0;border-radius:2px;">${escapeForHtml(
                         orig.slice(idx, idx + needleLen),
                     )}</mark>`;
                     pos = idx + needleLen;
@@ -195,7 +195,7 @@ export function TRDocDetailView({
         const root = docPaneRef.current;
         if (!root) return;
         const matches = root.querySelectorAll<HTMLElement>(
-            "mark.finch-search-match",
+            "mark.olava-search-match",
         );
         if (matches.length === 0) return;
         matches.forEach((m) => {

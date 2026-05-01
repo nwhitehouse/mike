@@ -20,9 +20,9 @@ export const OLAVA_MID_MODELS = ["olava-extract"] as const;
 export const CLAUDE_LOW_MODELS = ["claude-haiku-4-5"] as const;
 export const GEMINI_LOW_MODELS = ["gemini-3.1-flash-lite-preview"] as const;
 
-export const DEFAULT_MAIN_MODEL = "gemini-3-flash-preview";
-export const DEFAULT_TITLE_MODEL = "gemini-3.1-flash-lite-preview";
-export const DEFAULT_TABULAR_MODEL = "gemini-3-flash-preview";
+export const DEFAULT_MAIN_MODEL = "olava-extract";
+export const DEFAULT_TITLE_MODEL = "olava-extract";
+export const DEFAULT_TABULAR_MODEL = "olava-extract";
 
 const ALL_MODELS = new Set<string>([
     ...CLAUDE_MAIN_MODELS,

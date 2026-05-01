@@ -612,7 +612,7 @@ export function TRChatPanel({
         geminiApiKey: profile?.geminiApiKey ?? null,
         serverKeys: profile?.serverKeys ?? null,
     };
-    const currentModel = profile?.tabularModel ?? "gemini-3-flash-preview";
+    const currentModel = profile?.tabularModel ?? "olava-extract";
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);
     const [chats, setChats] = useState<TRChat[]>([]);

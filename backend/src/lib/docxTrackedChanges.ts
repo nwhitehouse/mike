@@ -789,7 +789,7 @@ export async function applyTrackedEdits(
     edits: EditInput[],
     opts?: { author?: string },
 ): Promise<ApplyTrackedEditsResult> {
-    const author = opts?.author ?? "Finch";
+    const author = opts?.author ?? "Olava";
     const now = new Date().toISOString();
 
     const zip = await JSZip.loadAsync(bytes);

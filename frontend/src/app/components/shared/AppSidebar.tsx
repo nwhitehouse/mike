@@ -138,7 +138,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     shouldAnimate ? "sidebar-fade-in" : ""
                                 }`}
                             >
-                                Finch
+                                Olava
                             </span>
                         </Link>
                     </div>

@@ -104,7 +104,7 @@ export function TRView({ reviewId, projectId }: Props) {
         geminiApiKey: profile?.geminiApiKey ?? null,
         serverKeys: profile?.serverKeys ?? null,
     };
-    const tabularModel = profile?.tabularModel ?? "gemini-3-flash-preview";
+    const tabularModel = profile?.tabularModel ?? "olava-extract";
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);

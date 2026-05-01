@@ -54,10 +54,6 @@ interface UserProfileContextType {
         field: "tabularModel",
         value: string,
     ) => Promise<boolean>;
-    updateApiKey: (
-        provider: "claude" | "gemini",
-        value: string | null,
-    ) => Promise<boolean>;
     reloadProfile: () => Promise<void>;
     incrementMessageCredits: () => Promise<boolean>;
 }
@@ -99,7 +95,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     creditsResetDate: defaultResetDateStr,
                     creditsRemaining: MONTHLY_CREDIT_LIMIT,
                     tier: "Free",
-                    tabularModel: "gemini-3-flash-preview",
+                    tabularModel: "olava-extract",
                     claudeApiKey: null,
                     geminiApiKey: null,
                     serverKeys,
@@ -134,7 +130,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     creditsRemaining: creditsRemaining,
                     tier: data.tier || "Free",
                     tabularModel:
-                        data.tabular_model || "gemini-3-flash-preview",
+                        data.tabular_model || "olava-extract",
                     claudeApiKey: data.claude_api_key ?? null,
                     geminiApiKey: data.gemini_api_key ?? null,
                     serverKeys,
@@ -172,7 +168,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 creditsResetDate: futureResetDate.toISOString(),
                 creditsRemaining: 999999, // temporarily unlimited
                 tier: "Free",
-                tabularModel: "gemini-3-flash-preview",
+                tabularModel: "olava-extract",
                 claudeApiKey: null,
                 geminiApiKey: null,
                 serverKeys: null,
@@ -271,37 +267,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [user],
     );
 
-    const updateApiKey = useCallback(
-        async (
-            provider: "claude" | "gemini",
-            value: string | null,
-        ): Promise<boolean> => {
-            if (!user) return false;
-            const dbField =
-                provider === "claude" ? "claude_api_key" : "gemini_api_key";
-            const stateField =
-                provider === "claude" ? "claudeApiKey" : "geminiApiKey";
-            const normalized = value?.trim() ? value.trim() : null;
-            try {
-                const { error } = await supabase
-                    .from("user_profiles")
-                    .update({
-                        [dbField]: normalized,
-                        updated_at: new Date().toISOString(),
-                    })
-                    .eq("user_id", user.id);
-                if (error) throw error;
-                setProfile((prev) =>
-                    prev ? { ...prev, [stateField]: normalized } : null,
-                );
-                return true;
-            } catch {
-                return false;
-            }
-        },
-        [user],
-    );
-
     const reloadProfile = useCallback(async () => {
         if (user) {
             await loadProfile(user.id);
@@ -358,7 +323,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 updateDisplayName,
                 updateOrganisation,
                 updateModelPreference,
-                updateApiKey,
                 reloadProfile,
                 incrementMessageCredits,
             }}

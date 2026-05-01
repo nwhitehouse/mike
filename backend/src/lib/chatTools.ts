@@ -75,7 +75,7 @@ export type ChatMessage = {
 // Constants
 // ---------------------------------------------------------------------------
 
-export const SYSTEM_PROMPT = `You are Finch, an AI legal assistant that helps lawyers and legal professionals analyze documents, answer legal questions, and draft legal documents.
+export const SYSTEM_PROMPT = `You are Olava, an AI legal assistant that helps lawyers and legal professionals analyze documents, answer legal questions, and draft legal documents.
 
 DOCUMENT CITATION INSTRUCTIONS:
 When you reference specific content from a document, place a numbered marker [1], [2], etc. inline in your prose at the point of reference.
@@ -1018,7 +1018,7 @@ export async function runEditDocument(params: {
     const { bytes: editedBytes, changes, errors } = await applyTrackedEdits(
         current.bytes,
         edits,
-        { author: "Finch" },
+        { author: "Olava" },
     );
 
     if (changes.length === 0) {

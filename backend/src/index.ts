@@ -30,7 +30,7 @@ app.use(
       // Same-origin / curl / server-to-server has no Origin header — allow.
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
-      // Vercel preview URLs: finch-<branch>-<hash>.vercel.app
+      // Vercel preview URLs: olava-<branch>-<hash>.vercel.app
       try {
         const host = new URL(origin).hostname;
         if (host.endsWith(".vercel.app")) return cb(null, true);
@@ -58,5 +58,5 @@ app.use("/download", downloadsRouter);
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
-  console.log(`Finch backend running on port ${PORT}`);
+  console.log(`Olava backend running on port ${PORT}`);
 });
