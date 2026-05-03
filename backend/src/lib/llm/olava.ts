@@ -50,6 +50,113 @@ function stripThinkBlocks(s: string): string {
     return s.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 
+// Streaming-safe filter that hides two kinds of model-side markup from the
+// user-visible token stream while leaving the raw text intact for downstream
+// parsing:
+//
+//   1. <think>...</think> blocks — defensive against vLLM builds that embed
+//      reasoning in `delta.content` instead of `delta.reasoning_content`.
+//   2. <tool_call>... markup — the Olava LoRA's custom tool-call format
+//      (parsed post-stream by parseCustomToolCall). Once <tool_call> opens,
+//      everything after it is suppressed from the user view; the raw buffer
+//      still receives it for the parser.
+//
+// The filter holds back any trailing portion of a delta that could be the
+// start of one of these tags (e.g. `<`, `<t`, `<tool_cal`) so a marker split
+// across two streamed chunks isn't accidentally emitted.
+class StreamingMarkupFilter {
+    private inThink = false;
+    private toolCallSeen = false;
+    private tail = "";
+
+    feed(delta: string): string {
+        if (this.toolCallSeen || !delta) return "";
+
+        let buf = this.tail + delta;
+        this.tail = "";
+        let visible = "";
+
+        while (buf.length > 0) {
+            if (this.inThink) {
+                const closeIdx = buf.indexOf("</think>");
+                if (closeIdx >= 0) {
+                    buf = buf.slice(closeIdx + "</think>".length);
+                    this.inThink = false;
+                    continue;
+                }
+                this.tail = StreamingMarkupFilter.heldBackSuffix(buf, [
+                    "</think>",
+                ]);
+                return visible;
+            }
+
+            const thinkIdx = buf.indexOf("<think>");
+            const toolIdx = buf.indexOf("<tool_call>");
+
+            let nextIdx = -1;
+            let nextLen = 0;
+            let nextType: "think" | "tool" | null = null;
+            if (thinkIdx >= 0) {
+                nextIdx = thinkIdx;
+                nextLen = "<think>".length;
+                nextType = "think";
+            }
+            if (toolIdx >= 0 && (nextIdx < 0 || toolIdx < nextIdx)) {
+                nextIdx = toolIdx;
+                nextLen = "<tool_call>".length;
+                nextType = "tool";
+            }
+
+            if (nextIdx >= 0) {
+                visible += buf.slice(0, nextIdx);
+                buf = buf.slice(nextIdx + nextLen);
+                if (nextType === "think") {
+                    this.inThink = true;
+                    continue;
+                } else {
+                    this.toolCallSeen = true;
+                    return visible;
+                }
+            }
+
+            const tailLen = StreamingMarkupFilter.heldBackSuffix(buf, [
+                "<think>",
+                "<tool_call>",
+            ]).length;
+            visible += buf.slice(0, buf.length - tailLen);
+            this.tail = buf.slice(buf.length - tailLen);
+            return visible;
+        }
+
+        return visible;
+    }
+
+    flush(): string {
+        if (this.toolCallSeen || this.inThink) {
+            this.tail = "";
+            return "";
+        }
+        const visible = this.tail;
+        this.tail = "";
+        return visible;
+    }
+
+    // Returns the trailing slice of `buf` that is a non-empty proper prefix
+    // of any target tag, or "" if no such prefix is at the end. Used to
+    // decide how many trailing chars to hold back across stream chunks.
+    private static heldBackSuffix(buf: string, targets: string[]): string {
+        const lt = buf.lastIndexOf("<");
+        if (lt < 0) return "";
+        const tail = buf.slice(lt);
+        for (const t of targets) {
+            if (tail.length < t.length && t.startsWith(tail)) {
+                return tail;
+            }
+        }
+        return "";
+    }
+}
+
 function endpoint(): string {
     const base = (process.env.OLAVA_BASE_URL ?? "").replace(/\/+$/, "");
     if (!base) throw new Error("OLAVA_BASE_URL is not set");
@@ -122,16 +229,24 @@ export async function streamOlava(
     const { model, systemPrompt, tools = [], callbacks = {}, runTools } = params;
     const maxIter = params.maxIterations ?? 10;
 
-    // vLLM's streaming + --enable-auto-tool-choice combination is fragile
-    // with hermes / qwen tool parsers: it emits `delta.content` chunks
-    // each carrying an empty `tool_calls: []`, then a final event with
-    // `finish_reason: "tool_calls"` but never streams the real tool-call
-    // payload. The non-streaming endpoint returns a complete
-    // `message.tool_calls` array, so when tools are forwarded we drop
-    // streaming and use a single request/response per iteration.
+    // vLLM's tool-call streaming is broken for the Olava LoRA: with
+    // --tool-call-parser hermes (or any other built-in), the LoRA's custom
+    // markup `<tool_call><function=NAME><parameter=KEY>VALUE</parameter>...`
+    // never gets parsed, so `delta.tool_calls` arrives empty even though
+    // `finish_reason` is "tool_calls". We work around this by accepting the
+    // markup IN `delta.content`, hiding it from the user via a streaming
+    // filter, and running the same `parseCustomToolCall()` we use on the
+    // non-streaming path once the stream finishes.
+    //
+    // Emergency rollback: set OLAVA_FORCE_NONSTREAM_TOOLS=true to revert to
+    // a single non-streaming request per iteration (the prior behaviour).
     const allowTools =
         process.env.OLAVA_ENABLE_TOOLS?.toLowerCase() === "true";
-    if (tools.length > 0 && allowTools) {
+    if (
+        tools.length > 0 &&
+        allowTools &&
+        process.env.OLAVA_FORCE_NONSTREAM_TOOLS?.toLowerCase() === "true"
+    ) {
         return nonStreamOlavaWithTools(params);
     }
 
@@ -177,6 +292,7 @@ export async function streamOlava(
         const accCalls = new Map<number, { id: string; name: string; argText: string }>();
         let reasoningChars = 0;
         let finishReason: string | null = null;
+        const filter = new StreamingMarkupFilter();
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -210,6 +326,11 @@ export async function streamOlava(
                 if (!delta) continue;
                 if (typeof delta.content === "string" && delta.content) {
                     iterTextChunks.push(delta.content);
+                    const visible = filter.feed(delta.content);
+                    if (visible) {
+                        fullText += visible;
+                        callbacks.onContentDelta?.(visible);
+                    }
                 }
                 // Reasoning is dropped from output but counted for diagnostics.
                 if (typeof delta.reasoning === "string" && delta.reasoning) {
@@ -238,13 +359,15 @@ export async function streamOlava(
             }
         }
 
-        // Strip any inline <think>...</think> blocks before exposing the text
-        // downstream — defensive against vLLM builds that embed reasoning in
-        // content (in addition to or instead of the separate field).
+        // Stream is done — flush any held-back chars that turned out not to
+        // be a partial tag prefix.
+        const tail = filter.flush();
+        if (tail) {
+            fullText += tail;
+            callbacks.onContentDelta?.(tail);
+        }
+
         const rawText = iterTextChunks.join("");
-        const text = stripThinkBlocks(rawText);
-        if (text) callbacks.onContentDelta?.(text);
-        fullText += text;
 
         if (finishReason === "length") {
             console.warn(
@@ -254,6 +377,11 @@ export async function streamOlava(
             );
         }
 
+        // Build the tool-call list. Prefer vLLM's structured `delta.tool_calls`
+        // payload when present (will start working if a future vLLM build
+        // recognises Olava's format). Otherwise fall back to parsing the
+        // custom <tool_call><function=...><parameter=...> markup out of the
+        // raw streamed content — same parser used by the non-streaming path.
         const toolCalls: NormalizedToolCall[] = [];
         for (const slot of accCalls.values()) {
             let input: Record<string, unknown> = {};
@@ -267,17 +395,36 @@ export async function streamOlava(
                 name: slot.name,
                 input,
             };
-            callbacks.onToolCallStart?.(call);
             toolCalls.push(call);
         }
+
+        if (toolCalls.length === 0) {
+            const parsed = parseCustomToolCall(rawText);
+            if (parsed && parsed.name) {
+                toolCalls.push({
+                    id: `${parsed.name}-${iter}-${Date.now()}`,
+                    name: parsed.name,
+                    input: parsed.input,
+                });
+            }
+        }
+
+        toolCalls.forEach((c) => callbacks.onToolCallStart?.(c));
 
         if (!toolCalls.length || !runTools) break;
 
         const results = await runTools(toolCalls);
 
+        // The assistant turn message we send back to the model echoes the
+        // raw text it produced (think blocks stripped) so the next iteration
+        // sees a clean transcript. The user-visible filtered text is a
+        // separate concern — what we showed the user is decoupled from what
+        // the model sees on its next turn.
+        const assistantContent = stripThinkBlocks(rawText);
+
         messages.push({
             role: "assistant",
-            content: text || null,
+            content: assistantContent || null,
             tool_calls: toolCalls.map((c) => ({
                 id: c.id,
                 type: "function",
