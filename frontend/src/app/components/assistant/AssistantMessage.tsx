@@ -1233,11 +1233,22 @@ export function AssistantMessage({
     // events into their own PreResponseWrapper. Content events render
     // between wrappers, so reasoning/tool chatter that arrives after the
     // model has already streamed some prose gets its own wrapper.
+    //
+    // Exception: reference_added events are first-class — they ARE the
+    // answer when Olava under-synthesises (which it does on multi-source
+    // research queries). They break out of the pre-wrapper just like
+    // content does, so cards stay visible without the user expanding
+    // a "Completed in N steps" disclosure.
     type EventGroup =
         | { kind: "pre"; events: AssistantEvent[]; indices: number[] }
         | {
               kind: "content";
               event: Extract<AssistantEvent, { type: "content" }>;
+              index: number;
+          }
+        | {
+              kind: "reference";
+              event: Extract<AssistantEvent, { type: "reference_added" }>;
               index: number;
           };
 
@@ -1251,6 +1262,12 @@ export function AssistantMessage({
                     current = null;
                 }
                 groups.push({ kind: "content", event: e, index: i });
+            } else if (e.type === "reference_added") {
+                if (current) {
+                    groups.push(current);
+                    current = null;
+                }
+                groups.push({ kind: "reference", event: e, index: i });
             } else {
                 if (!current)
                     current = { kind: "pre", events: [], indices: [] };
@@ -1452,6 +1469,19 @@ export function AssistantMessage({
                                             }
                                         />
                                     </div>
+                                );
+                            }
+                            if (g.kind === "reference") {
+                                return (
+                                    <ReferenceBlock
+                                        key={`r-${g.index}`}
+                                        sourceKind={g.event.source_kind}
+                                        title={g.event.title}
+                                        url={g.event.url}
+                                        snippet={g.event.snippet}
+                                        sourceLabel={g.event.source_label}
+                                        date={g.event.date}
+                                    />
                                 );
                             }
                             const subsequentContent = hasContentAfter(gIdx);
