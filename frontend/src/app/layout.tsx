@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, EB_Garamond } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { Analytics } from "@vercel/analytics/next";
 
 const inter = Inter({
     variable: "--font-inter",
@@ -38,6 +39,7 @@ export default function RootLayout({
                 className={`${inter.variable} ${ebGaramond.variable} font-sans antialiased`}
             >
                 <Providers>{children}</Providers>
+                <Analytics />
             </body>
         </html>
     );
