@@ -219,7 +219,7 @@ Add a `web_search` tool backed by the Brave Search API, gated by a globe-icon to
 ---
 
 ### feat-004 References inline display
-**Status:** planning
+**Status:** done
 **Branch:** `feat-004-references-inline` (worktree created, not yet started)
 **Priority:** High — closes the citation gap regardless of model synthesis quality
 **Size:** Small-Medium (~½ day)

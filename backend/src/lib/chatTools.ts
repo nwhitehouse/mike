@@ -1531,6 +1531,17 @@ export type DocReplicatedResult = {
     }[];
 };
 
+export type ReferenceResult = {
+    source_kind: "legal" | "web";
+    title: string;
+    url: string;
+    snippet: string;
+    /** Human-readable origin: "CourtListener", "Federal Register", "Web", etc. */
+    source_label: string;
+    /** Optional ISO date string. */
+    date?: string;
+};
+
 export async function runToolCalls(
     toolCalls: ToolCall[],
     docStore: DocStore,
@@ -1551,6 +1562,7 @@ export async function runToolCalls(
     docsReplicated: DocReplicatedResult[];
     workflowsApplied: { workflow_id: string; title: string }[];
     docsEdited: DocEditedResult[];
+    references: ReferenceResult[];
 }> {
     const toolResults: unknown[] = [];
     const docsRead: { filename: string; document_id?: string }[] = [];
@@ -1563,6 +1575,7 @@ export async function runToolCalls(
     const docsReplicated: DocReplicatedResult[] = [];
     const workflowsApplied: { workflow_id: string; title: string }[] = [];
     const docsEdited: DocEditedResult[] = [];
+    const references: ReferenceResult[] = [];
 
     for (const tc of toolCalls) {
         let args: Record<string, unknown> = {};
@@ -1649,6 +1662,20 @@ export async function runToolCalls(
                     query,
                     resolved as Parameters<typeof legalSearch>[1],
                 );
+                for (const r of results) {
+                    const ref: ReferenceResult = {
+                        source_kind: "legal",
+                        title: r.title,
+                        url: r.url,
+                        snippet: r.snippet,
+                        source_label: r.source,
+                        date: r.date,
+                    };
+                    references.push(ref);
+                    write(
+                        `data: ${JSON.stringify({ type: "reference_added", ...ref })}\n\n`,
+                    );
+                }
                 toolResults.push({
                     role: "tool",
                     tool_call_id: tc.id,
@@ -1670,6 +1697,19 @@ export async function runToolCalls(
             );
             try {
                 const results = await webSearch(query);
+                for (const r of results) {
+                    const ref: ReferenceResult = {
+                        source_kind: "web",
+                        title: r.title,
+                        url: r.url,
+                        snippet: r.snippet,
+                        source_label: "Web",
+                    };
+                    references.push(ref);
+                    write(
+                        `data: ${JSON.stringify({ type: "reference_added", ...ref })}\n\n`,
+                    );
+                }
                 toolResults.push({
                     role: "tool",
                     tool_call_id: tc.id,
@@ -2319,6 +2359,7 @@ export async function runToolCalls(
         docsReplicated,
         workflowsApplied,
         docsEdited,
+        references,
     };
 }
 
@@ -2394,6 +2435,15 @@ type AssistantEvent =
           }[];
       }
     | { type: "workflow_applied"; workflow_id: string; title: string }
+    | {
+          type: "reference_added";
+          source_kind: "legal" | "web";
+          title: string;
+          url: string;
+          snippet: string;
+          source_label: string;
+          date?: string;
+      }
     | {
           type: "doc_edited";
           filename: string;
@@ -2600,6 +2650,7 @@ export async function runLLMStream(params: {
                 docsReplicated,
                 workflowsApplied,
                 docsEdited,
+                references,
             } = await runToolCalls(
                     toolCalls,
                     docStore,
@@ -2613,6 +2664,17 @@ export async function runLLMStream(params: {
                     projectId,
                     selectedLegalSources,
                 );
+            for (const ref of references) {
+                events.push({
+                    type: "reference_added",
+                    source_kind: ref.source_kind,
+                    title: ref.title,
+                    url: ref.url,
+                    snippet: ref.snippet,
+                    source_label: ref.source_label,
+                    date: ref.date,
+                });
+            }
             for (const r of docsRead) {
                 events.push({
                     type: "doc_read",

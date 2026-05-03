@@ -570,6 +570,22 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "reference_added") {
+                            pushEvent({
+                                type: "reference_added",
+                                source_kind:
+                                    (data.source_kind as "legal" | "web") ??
+                                    "web",
+                                title: (data.title as string) ?? "",
+                                url: (data.url as string) ?? "",
+                                snippet: (data.snippet as string) ?? "",
+                                source_label:
+                                    (data.source_label as string) ?? "",
+                                date: data.date as string | undefined,
+                            });
+                            continue;
+                        }
+
                         if (data.type === "doc_find_start") {
                             pushEvent({
                                 type: "doc_find",

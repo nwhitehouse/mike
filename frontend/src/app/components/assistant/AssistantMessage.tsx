@@ -465,6 +465,75 @@ function DocReadBlock({
     );
 }
 
+function ReferenceBlock({
+    sourceKind,
+    title,
+    url,
+    snippet,
+    sourceLabel,
+    date,
+    showConnector,
+}: {
+    sourceKind: "legal" | "web";
+    title: string;
+    url: string;
+    snippet: string;
+    sourceLabel: string;
+    date?: string;
+    showConnector?: boolean;
+}) {
+    const dateStr = date
+        ? new Date(date).toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+          })
+        : null;
+    const meta = [sourceLabel, dateStr].filter(Boolean).join(" · ");
+    const card = (
+        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 hover:border-gray-300 hover:bg-gray-50 transition-colors">
+            <div className="flex items-baseline gap-2 mb-1">
+                <span
+                    className={`text-[10px] font-medium uppercase tracking-wide shrink-0 ${
+                        sourceKind === "legal" ? "text-blue-600" : "text-gray-500"
+                    }`}
+                >
+                    {sourceKind === "legal" ? "Legal" : "Web"}
+                </span>
+                <span className="text-xs text-gray-500 truncate">{meta}</span>
+            </div>
+            <div className="text-sm font-medium text-gray-900 mb-1 line-clamp-2">
+                {title || "(untitled)"}
+            </div>
+            {snippet && (
+                <div className="text-xs text-gray-600 line-clamp-2">{snippet}</div>
+            )}
+        </div>
+    );
+    return (
+        <div className="flex items-start text-sm relative my-1">
+            {showConnector && (
+                <div className="absolute bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
+            )}
+            <div className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+            <div className="ml-2 min-w-0 flex-1">
+                {url ? (
+                    <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block no-underline"
+                    >
+                        {card}
+                    </a>
+                ) : (
+                    card
+                )}
+            </div>
+        </div>
+    );
+}
+
 function DocFindBlock({
     filename,
     query,
@@ -1277,6 +1346,20 @@ export function AssistantMessage({
                             ? () => onCitationClick(ann)
                             : undefined
                     }
+                    showConnector={showConnector}
+                />
+            );
+        }
+        if (event.type === "reference_added") {
+            return (
+                <ReferenceBlock
+                    key={globalIdx}
+                    sourceKind={event.source_kind}
+                    title={event.title}
+                    url={event.url}
+                    snippet={event.snippet}
+                    sourceLabel={event.source_label}
+                    date={event.date}
                     showConnector={showConnector}
                 />
             );

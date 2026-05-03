@@ -129,6 +129,22 @@ export type AssistantEvent =
     }
   | { type: "workflow_applied"; workflow_id: string; title: string }
   | {
+        /**
+         * One per result from a search-style tool (legal_search, web_search).
+         * Rendered as a clickable card in the assistant message so the user
+         * sees source links even when Olava's prose synthesis drops them.
+         */
+        type: "reference_added";
+        source_kind: "legal" | "web";
+        title: string;
+        url: string;
+        snippet: string;
+        /** Human-readable origin: "CourtListener", "Federal Register", "Web", etc. */
+        source_label: string;
+        /** Optional ISO date string when the source was published / decided. */
+        date?: string;
+    }
+  | {
         type: "doc_edited";
         filename: string;
         document_id: string;
