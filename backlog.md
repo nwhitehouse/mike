@@ -162,12 +162,193 @@ The model can then cite inline with markdown links — no frontend change needed
 
 ---
 
-### feat-003 Brave web search
-**Status:** ready (blocked-by feat-001 for streaming events)
-**Branch:** `feat-003-brave-web-search` (not yet created)
-**Priority:** Medium — broad fallback when legal databases miss
-**Size:** Small (~half day)
+### feat-003 Brave web search with globe-icon toggle
+**Status:** done
+**Branch:** `feat-003-web-search`
+**Priority:** High — needed by feat-005 multi-pass orchestrator + standalone value for current commentary
+**Size:** Medium (~1d, includes frontend globe icon)
 
-Port `_brave_web_search` from `work___/backend/services/chat_service.py:1206`. Single `web_search` tool, single env var `BRAVE_SEARCH_API_KEY`.
+Add a `web_search` tool backed by the Brave Search API, gated by a globe-icon toggle on the right side of the chat input (Ruli pattern). Hard-gated like legal sources: globe off → tool not in schema.
 
-Detail to be planned when feat-002 merges.
+**Why now.** feat-002 demonstrated the gap vs work___: most of the rich content in their answer came from web search (the Dentons commentary article), not legal databases. feat-005 (multi-pass orchestrator) will fan out across both legal and web in parallel — needs this tool to exist.
+
+**Backend — files to create.**
+- `backend/src/lib/webSearch.ts` — Brave Search API client. Single `webSearch(query, count)` function. Returns `{ title, url, snippet, source: "Web" }[]`. 12s timeout via AbortController. Same shape as legalSearch results so feat-004 can render both as one card type.
+
+**Backend — files to modify.**
+- `chatTools.ts`:
+  - Define `WEB_TOOLS` array (same conditional pattern as `LEGAL_TOOLS`).
+  - Dispatch case for `web_search` in `runToolCalls()`.
+  - `runLLMStream` accepts `sources.web?: boolean`. When true → append `WEB_TOOLS` to `activeTools` and add system-prompt line "Web search is enabled — use it for current events, blog posts, and commentary not in legal databases."
+- `chat.ts` — already plumbs `sources` from request body; just include `sources.web` in the type.
+- `.env.example` — add `BRAVE_SEARCH_API_KEY`.
+
+**Frontend — files to modify.**
+- `ChatInput.tsx`:
+  - Add `webSearchEnabled` boolean state (default false).
+  - Add a globe icon button on the right side of the input, between the model toggle and the send button. Filled blue when on, gray when off. Click toggles.
+  - Include in submitted MikeMessage: `sources: { ..., web: webSearchEnabled }`.
+  - Reset `webSearchEnabled = false` after each submit (per-message-only, matches legal-sources behaviour).
+- `MikeMessage.sources` type already accepts arbitrary fields; add `web?: boolean` to the type.
+- `mikeApi.streamChat` already passes `sources` through; no change needed.
+
+**Key decisions.**
+- **Globe icon position:** right side of input, near send button, matching the Ruli reference image. Distinct from the left-side "Files and sources" picker because legal sources are categorically different (curated, opt-in per source) from web search (everything-everywhere fallback).
+- **Hard gate:** globe off → no `web_search` in tool schema (model can't call it). Avoids accidental web spend on doc-focused chats.
+- **Rate limiting:** none in v1. Brave's free tier is 2K queries/month. If we hit caps we add per-user throttle.
+- **Result format:** same shape as legalSearch results so feat-004 references-inline doesn't need branch logic per source type.
+
+**Risks.**
+- Brave API quota — free tier is enough for dev, may need paid plan for prod.
+- Outbound httpSecurity (already cleared in feat-002 — helmet only sets response headers, no outbound restrictions).
+
+**Test plan.**
+- `tsc` clean both sides.
+- Smoke: `node` script calling `webSearch("AI court opinion 2026")` directly with a real BRAVE_SEARCH_API_KEY → confirm results returned.
+- Manual: globe off, ask "current AI news" → tool not invoked, model answers from training.
+- Manual: globe on, same question → tool fires, model cites web sources.
+- Manual: globe on + Court Opinions checked → both tools available, model picks appropriately.
+
+**Acceptance.**
+- Globe icon renders on right side of chat input; click toggles state visually.
+- Globe off → `web_search` not in schema (verifiable in backend log of activeToolNames).
+- Globe on → tool fires when model asks about current/web-y questions.
+- Reset after submit.
+- `.env.example` documents `BRAVE_SEARCH_API_KEY`.
+
+---
+
+### feat-004 References inline display
+**Status:** planning
+**Branch:** `feat-004-references-inline` (worktree created, not yet started)
+**Priority:** High — closes the citation gap regardless of model synthesis quality
+**Size:** Small-Medium (~½ day)
+
+Surface every `legal_search` and `web_search` result as a structured event the frontend can render as a clickable card in the assistant message. Decouples link/source visibility from Olava's synthesis prose — the user sees raw results even when the model under-summarises.
+
+**Why now.** feat-002 testing showed Olava drops URLs from its synthesis even when they're in the tool result. work___'s "References" sidebar fixes this by rendering raw results separately. We do the same, inline (no sidebar — keeps the chat UI dense).
+
+**Backend — files to modify.**
+- `chatTools.ts`:
+  - In the `legal_search` and `web_search` dispatch cases, after fetching results, push a `reference_added` event for each result into the events array.
+  - Each event: `{ type: "reference_added", source: "legal" | "web", title, url, snippet, date?, source_label }`.
+- `frontend/src/app/components/shared/types.ts` — add `reference_added` to AssistantEvent union.
+
+**Frontend — files to modify.**
+- `AssistantMessage.tsx` — render `reference_added` events as a horizontal-scrolling row of compact cards (icon + title + source + date), interleaved chronologically with content events.
+  - Card style: similar to `EditCard.tsx` shape — small, clickable, opens URL in new tab.
+
+**Key decisions.**
+- **Inline vs sidebar.** Inline keeps the chat compact and matches mike's existing pattern of doc_read/doc_created cards in the message stream. work___ uses a sidebar — different layout philosophy.
+- **One event per result, not batched.** Easier for streaming and for feat-005 which will fire results in parallel passes.
+- **Same shape for legal + web.** feat-003 already aligns these on the backend.
+
+**Test plan.**
+- `tsc` + `next build` clean.
+- Manual: select Court Opinions, ask a legal question → confirm cards appear in message + link clickable.
+- Manual: globe on, ask current question → confirm web result cards appear.
+- Manual: both on, multi-source question → confirm cards from both sources interleaved.
+
+**Acceptance.**
+- Each tool result renders as a clickable card in the assistant message.
+- Cards work for both legal and web sources.
+- Olava's prose synthesis is no longer the only path to source URLs.
+
+---
+
+### feat-005 Multi-pass research orchestrator
+**Status:** planning (awaiting Nick's review of detailed plan below)
+**Branch:** `feat-005-research-orchestrator` (not yet created)
+**Priority:** High — strategic direction, closes the work___ quality gap
+**Size:** Large (~3 days)
+
+Embrace Olava's cost advantage: orchestrate 13–17 parallel + sequential Olava calls into a richer answer than any single-pass attempt. Architectural reference is work___'s `services/{orchestrator,sub_agent,loop_controller}.py`, but designed fresh for Olava-001 (Qwen3.6 base + LoRA) — different context size, custom tool-call markup, vLLM streaming quirks.
+
+**Trigger (auto-detect).** Any chat where `sources.legal?.length > 0` OR `sources.web === true` → route to orchestrator instead of single-pass `runLLMStream`. Selecting a source = user signal "I want depth."
+
+**Pipeline (5 passes).**
+
+```
+Pass 1 — Query expansion           (1 Olava call,  ~3s)
+  Input:  user question + selected sources
+  Output: 3-5 specialized search queries, each tagged target=legal|web
+
+Pass 2 — Parallel search swarm     (5-10 search API calls, ~3-5s wall)
+  Promise.allSettled across all queries × applicable tools
+  Dedupe by URL, normalise shape
+
+Pass 3 — Triage & rank             (1 Olava call,  ~3s)
+  Input:  user question + all dedup'd results (titles+snippets only)
+  Output: top-N (default 8) by recency × relevance
+
+Pass 4 — Per-result extraction     (≤10 parallel Olava calls, ~5-8s wall)
+  For each top-N result: 2-3 sentence extract tailored to user's question
+  Optionally fetch full doc text (CourtListener has full-opinion API)
+
+Pass 5 — Synthesis                 (1 Olava call,  ~5-10s)
+  Input:  user question + per-result extracts
+  Output: narrative answer with inline [Title](URL) citations
+  Streamed token-by-token to user (uses feat-001 streaming path)
+```
+
+**Hard caps (enforced in budget.ts):**
+- Max Olava calls per turn: **25** (configurable via env)
+- Max wall-clock: **45s** (return what we have at the cap)
+- Max parallel search calls: 10
+- Max parallel extract calls: 10
+
+**Streaming progress events** (so 30s of work doesn't look like 30s of dead air):
+- `research.expanding_queries` — show the queries being generated
+- `research.searching` — show "Searching 6 sources…" with live count
+- `research.search_complete` — N results found
+- `research.ranking` — show "Ranking 47 results…"
+- `research.extracting` — progress like "Reading 5/10…"
+- `research.synthesizing` — show "Drafting answer…"
+- `chat.token` — final answer streams as Olava produces it
+
+Frontend renders a progress checklist similar to work___'s plan UI in the assistant message.
+
+**Files to create.**
+- `backend/src/lib/research/orchestrator.ts` — main pipeline coordinator
+- `backend/src/lib/research/queryExpander.ts` — pass 1
+- `backend/src/lib/research/searchFanOut.ts` — pass 2 (uses legalSearch + webSearch)
+- `backend/src/lib/research/triage.ts` — pass 3
+- `backend/src/lib/research/extractor.ts` — pass 4
+- `backend/src/lib/research/synthesizer.ts` — pass 5 (streams via existing olava streaming)
+- `backend/src/lib/research/budget.ts` — hard cap enforcement (call counter, wall-clock timer)
+- `backend/src/lib/research/types.ts` — shared types (RankedResult, ExtractedFinding, etc.)
+
+**Files to modify.**
+- `backend/src/routes/chat.ts` — detect research mode, route to `runResearchOrchestrator` instead of `runLLMStream` when triggered.
+- `frontend/src/app/components/assistant/AssistantMessage.tsx` — render new `research.*` event types as a progress checklist + spinner.
+- `frontend/src/app/components/shared/types.ts` — add the new event types to AssistantEvent.
+
+**Failure modes & degradation.**
+- Pass 1 fails (Olava can't generate queries) → fall back to single-pass `runLLMStream`. User sees a normal chat response.
+- Pass 2 returns 0 results → fall back to single-pass + a system-prompt note "no sources found, answer from knowledge."
+- Pass 4 partially fails (some extracts time out) → use successful extracts, skip failed.
+- Pass 5 fails → return raw extracts as a structured list, no narrative.
+- Hard cap hit → emit a `research.cap_hit` event, return whatever we have synthesized so far.
+
+**Key decisions.**
+- **Olava as both planner and worker.** Same model, different system prompts per pass. Cheaper than routing some passes to Claude.
+- **No persistent research-mode state.** Each turn re-orchestrates. Simpler, supports follow-up questions naturally.
+- **Synthesis pass uses existing streaming path** (feat-001). Don't reinvent — token streaming for the final answer is already solved.
+- **Per-result extracts are JSON not prose** — easier for synthesis pass to consume reliably.
+
+**Test plan.**
+- `tsc` clean.
+- Unit: `budget.ts` enforces caps in isolation (call counter increments, wall-clock timer trips at 45s).
+- Smoke: end-to-end script that runs the orchestrator against "What's the latest court opinion involving AI?" and prints the final result + per-pass timings + Olava call count.
+- Manual: send the same question via UI; expect 20-30s of progress events then a richly-cited answer.
+- Manual: trigger each failure mode (no sources, 0 results, kill vLLM mid-pass) and confirm graceful degradation.
+- Manual: confirm cost cap (mock Olava to count calls without hitting prod, verify cap kicks in at 25).
+
+**Acceptance.**
+- Orchestrator triggers automatically when any source is selected.
+- "Latest AI court opinion" query produces an answer comparable to work___'s in richness and citation density (subjective but checkable side-by-side).
+- Wall-clock ≤ 45s for typical queries.
+- Olava call count ≤ 25 for typical queries.
+- Progress events visible in UI throughout the run.
+- Single-pass path still works when no sources selected (no regression).
+- No regression in feat-001/002/003/004.

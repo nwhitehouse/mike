@@ -158,7 +158,7 @@ export interface MikeMessage {
    * conversation history. Backend reads from the latest user message to
    * decide which optional tools (e.g. legal_search) to expose this turn.
    */
-  sources?: { legal?: string[] };
+  sources?: { legal?: string[]; web?: boolean };
 }
 
 export interface CitationQuote {

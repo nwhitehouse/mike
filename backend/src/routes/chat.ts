@@ -333,7 +333,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         chat_id?: string;
         project_id?: string;
         model?: string;
-        sources?: { legal?: string[] };
+        sources?: { legal?: string[]; web?: boolean };
     };
 
     const userEmail = res.locals.userEmail as string | undefined;

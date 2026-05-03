@@ -13,6 +13,7 @@ import {
     File,
     FileText,
     FolderOpen,
+    Globe,
     Library,
     Square,
     X,
@@ -62,6 +63,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<MikeDocument[]>([]);
     const [selectedLegalSources, setSelectedLegalSources] = useState<string[]>([]);
+    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
         id: string;
         title: string;
@@ -134,11 +136,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         setAttachedDocs([]);
         const wf = selectedWorkflow;
         setSelectedWorkflow(null);
-        const turnSources =
-            selectedLegalSources.length > 0
-                ? { legal: selectedLegalSources }
-                : undefined;
+        const turnSources: { legal?: string[]; web?: boolean } = {};
+        if (selectedLegalSources.length > 0) turnSources.legal = selectedLegalSources;
+        if (webSearchEnabled) turnSources.web = true;
+        const turnSourcesPayload = Object.keys(turnSources).length > 0 ? turnSources : undefined;
         setSelectedLegalSources([]);
+        setWebSearchEnabled(false);
 
         onSubmit?.({
             role: "user",
@@ -146,7 +149,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             files: files.length > 0 ? files : undefined,
             workflow: wf ?? undefined,
             model,
-            sources: turnSources,
+            sources: turnSourcesPayload,
         });
     };
 
@@ -284,6 +287,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         </div>
 
                         <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={() => setWebSearchEnabled((v) => !v)}
+                                aria-label={webSearchEnabled ? "Disable web search" : "Enable web search"}
+                                title={webSearchEnabled ? "Web search on" : "Web search off"}
+                                className={`flex items-center justify-center h-8 w-8 rounded-lg transition-colors cursor-pointer ${
+                                    webSearchEnabled
+                                        ? "text-blue-600 bg-blue-50 hover:bg-blue-100"
+                                        : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+                                }`}
+                            >
+                                <Globe className="h-4 w-4" />
+                            </button>
                             <ModelToggle
                                 value={model}
                                 onChange={setModel}

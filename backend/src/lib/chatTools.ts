@@ -255,6 +255,33 @@ export const WORKFLOW_TOOLS = [
     },
 ];
 
+// Conditionally appended to a chat's tool schema when the user has the
+// globe-icon web-search toggle on. Hard-gated: when off, this tool is not
+// in the schema and the model can't call it. Avoids spurious web spend on
+// document-only chats.
+export const WEB_TOOLS = [
+    {
+        type: "function",
+        function: {
+            name: "web_search",
+            description:
+                "Search the public web for current events, news, blog posts, and commentary. " +
+                "Use this when the user's question needs up-to-date information not in the user's documents " +
+                "or in the legal databases (e.g. recent news, expert analysis, vendor statements).",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description: "Web search query.",
+                    },
+                },
+                required: ["query"],
+            },
+        },
+    },
+];
+
 // Conditionally appended to a chat's tool schema when the user has selected
 // legal sources via the "Files and Sources" picker. Hard-gated: when no
 // sources are selected, this tool is not in the schema and the model can't
@@ -1636,6 +1663,27 @@ export async function runToolCalls(
                 });
             }
 
+        } else if (tc.function.name === "web_search") {
+            const query = (args.query as string) ?? "";
+            const { webSearch, formatWebResultsForModel } = await import(
+                "./webSearch"
+            );
+            try {
+                const results = await webSearch(query);
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: formatWebResultsForModel(results),
+                });
+            } catch (err) {
+                console.warn("[web_search] failed:", err);
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: "Web search failed; please try again.",
+                });
+            }
+
         } else if (tc.function.name === "list_documents") {
             const list = Array.from(docStore.entries()).map(
                 ([doc_id, info]) => ({
@@ -2378,21 +2426,22 @@ export async function runLLMStream(params: {
      */
     projectId?: string | null;
     /**
-     * Per-turn input gating from the chat input's "Files and Sources"
-     * picker. When `legal` is non-empty, the `legal_search` tool is
-     * appended to the schema and a system-prompt line restricts the
-     * model's `sources` arg to that list. Empty/undefined → tool is not
-     * in the schema at all (hard gate).
+     * Per-turn input gating. `legal`: which legal databases the user opted
+     * into via the Files and Sources picker. `web`: whether the globe-icon
+     * web-search toggle is on. Both are hard gates — when off/empty the
+     * corresponding tool is not in the schema and the model can't call it.
      */
-    sources?: { legal?: string[] };
+    sources?: { legal?: string[]; web?: boolean };
 }): Promise<{ fullText: string; events: AssistantEvent[] }> {
     const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId, sources } = params;
     const selectedLegalSources = sources?.legal ?? [];
+    const webEnabled = sources?.web === true;
     const activeTools = [
         ...TOOLS,
         ...WORKFLOW_TOOLS,
         ...(extraTools?.length ? extraTools : []),
         ...(selectedLegalSources.length ? LEGAL_TOOLS : []),
+        ...(webEnabled ? WEB_TOOLS : []),
     ];
 
     // Extract system prompt; pass remaining turns to the adapter as
@@ -2405,7 +2454,11 @@ export async function runLLMStream(params: {
           "When using the legal_search tool, set the `sources` argument to a subset of this list. " +
           "Do not search any other legal databases."
         : "";
-    const systemPrompt = baseSystemPrompt + legalSourceHint;
+    const webHint = webEnabled
+        ? "\n\nWeb search is enabled — use `web_search` for current events, news, blog posts, " +
+          "and commentary not covered by uploaded documents or legal databases."
+        : "";
+    const systemPrompt = baseSystemPrompt + legalSourceHint + webHint;
     const chatMessages: LlmMessage[] = rawMsgs
         .filter((m) => m.role !== "system")
         .map((m) => ({
