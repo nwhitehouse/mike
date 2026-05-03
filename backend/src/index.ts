@@ -9,45 +9,31 @@ import { tabularRouter } from "./routes/tabular";
 import { workflowsRouter } from "./routes/workflows";
 import { userRouter } from "./routes/user";
 import { downloadsRouter } from "./routes/downloads";
+import {
+  isOriginAllowed,
+  parseAllowedOrigins,
+  requestErrorHandler,
+  securityHeaders,
+} from "./lib/httpSecurity";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
+const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT ?? "2mb";
 
-// Origin allowlist:
-//  - FRONTEND_URL (the production domain — Vercel custom domain or *.vercel.app)
-//  - Any *.vercel.app subdomain (so Vercel preview deploys per PR also work)
-//  - Localhost on the dev port (and 3000 as a fallback for npm dev defaults)
-// Origin function gives us multi-origin support without rewriting on each
-// new preview URL.
-const allowedOrigins = new Set<string>([
-  process.env.FRONTEND_URL ?? "http://localhost:9000",
-  "http://localhost:9000",
-  "http://localhost:3000",
-]);
+const allowedOrigins = parseAllowedOrigins();
+app.disable("x-powered-by");
+app.use(securityHeaders());
 app.use(
   cors({
     origin: (origin, cb) => {
-      // Same-origin / curl / server-to-server has no Origin header — allow.
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.has(origin)) return cb(null, true);
-      try {
-        const host = new URL(origin).hostname;
-        // Vercel preview URLs: olava-<branch>-<hash>.vercel.app
-        if (host.endsWith(".vercel.app")) return cb(null, true);
-        // Production custom domain (apex + any subdomain — covers www).
-        if (host === "tryolava.ai" || host.endsWith(".tryolava.ai")) {
-          return cb(null, true);
-        }
-      } catch {
-        /* fall through to deny */
-      }
+      if (isOriginAllowed(origin, allowedOrigins)) return cb(null, true);
       cb(new Error(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,
   }),
 );
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 app.use("/chat", chatRouter);
 app.use("/projects", projectsRouter);
@@ -60,6 +46,7 @@ app.use("/users", userRouter);
 app.use("/download", downloadsRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+app.use(requestErrorHandler());
 
 app.listen(PORT, () => {
   console.log(`Olava backend running on port ${PORT}`);

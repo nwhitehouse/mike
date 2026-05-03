@@ -9,12 +9,23 @@ import crypto from "crypto";
  * expiry or R2 CORS headaches.
  */
 
-function getSecret(): string {
-    return (
-        process.env.DOWNLOAD_SIGNING_SECRET ??
-        process.env.SUPABASE_SECRET_KEY ??
-        "dev-secret"
-    );
+function getSecret(): string | null {
+    const secret = process.env.DOWNLOAD_SIGNING_SECRET?.trim();
+    return secret && secret.length >= 32 ? secret : null;
+}
+
+export function isDownloadSigningConfigured(): boolean {
+    return getSecret() !== null;
+}
+
+function requireSecret(): string {
+    const secret = getSecret();
+    if (!secret) {
+        throw new Error(
+            "DOWNLOAD_SIGNING_SECRET must be set to at least 32 characters",
+        );
+    }
+    return secret;
 }
 
 function b64urlEncode(buf: Buffer): string {
@@ -40,7 +51,7 @@ export function signDownload(path: string, filename: string): string {
     const payload = JSON.stringify({ p: path, f: filename });
     const enc = b64urlEncode(Buffer.from(payload, "utf8"));
     const sig = crypto
-        .createHmac("sha256", getSecret())
+        .createHmac("sha256", requireSecret())
         .update(enc)
         .digest();
     return `${enc}.${b64urlEncode(sig)}`;
@@ -49,11 +60,13 @@ export function signDownload(path: string, filename: string): string {
 export function verifyDownload(
     token: string,
 ): { path: string; filename: string } | null {
+    const secret = getSecret();
+    if (!secret) return null;
     const parts = token.split(".");
     if (parts.length !== 2) return null;
     const [enc, sigEnc] = parts;
     const expected = crypto
-        .createHmac("sha256", getSecret())
+        .createHmac("sha256", secret)
         .update(enc)
         .digest();
     if (!timingSafeEqStr(sigEnc, b64urlEncode(expected))) return null;

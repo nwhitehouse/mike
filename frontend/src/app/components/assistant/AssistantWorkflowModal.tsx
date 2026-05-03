@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, Search, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownUrl } from "@/lib/safeMarkdown";
 import type { MikeWorkflow } from "../shared/types";
 import { listWorkflows } from "@/app/lib/mikeApi";
 import { BUILT_IN_WORKFLOWS } from "../workflows/builtinWorkflows";
@@ -214,6 +215,7 @@ export function AssistantWorkflowModal({
                             <div className="flex-1 overflow-y-auto px-4 py-3 text-sm border border-gray-200 rounded-md text-gray-600 leading-relaxed font-serif bg-gray-50">
                                 <ReactMarkdown
                                     remarkPlugins={[remarkGfm]}
+                                    urlTransform={safeMarkdownUrl}
                                     components={{
                                         h1: ({ children }) => (
                                             <h1 className="text-base font-semibold text-gray-900 mt-4 mb-1 first:mt-0">

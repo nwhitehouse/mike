@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownUrl } from "@/lib/safeMarkdown";
 import type { ColumnConfig } from "../shared/types";
 import { formatIcon, formatLabel } from "../tabular/columnFormat";
 
@@ -52,7 +53,12 @@ export function WFColumnViewModal({ col, onClose }: Props) {
                     <div>
                         <p className="text-sm font-medium text-gray-500 mb-2">Prompt</p>
                         <div className="text-base text-gray-700 leading-relaxed font-serif prose prose-base max-w-none">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{col.prompt || "_No prompt defined._"}</ReactMarkdown>
+                            <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                urlTransform={safeMarkdownUrl}
+                            >
+                                {col.prompt || "_No prompt defined._"}
+                            </ReactMarkdown>
                         </div>
                     </div>
                 </div>

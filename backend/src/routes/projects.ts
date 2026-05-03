@@ -9,7 +9,7 @@ import {
 import { downloadFile, uploadFile, storageKey } from "../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../lib/convert";
 import { checkProjectAccess } from "../lib/access";
-import { singleFileUpload } from "../lib/upload";
+import { singleFileUpload, uploadConcurrencyLimit } from "../lib/upload";
 
 export const projectsRouter = Router();
 const ALLOWED_TYPES = new Set(["pdf", "docx", "doc"]);
@@ -28,10 +28,10 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
   if (ownError) return void res.status(500).json({ detail: ownError.message });
 
   const { data: sharedProjects, error: sharedError } = userEmail
-    ? await db
+        ? await db
         .from("projects")
         .select("*")
-        .contains("shared_with", [userEmail])
+        .contains("shared_with", JSON.stringify([userEmail]))
         .neq("user_id", userId)
         .order("created_at", { ascending: false })
     : { data: [], error: null };
@@ -441,6 +441,7 @@ projectsRouter.post(
 projectsRouter.post(
   "/:projectId/documents",
   requireAuth,
+  uploadConcurrencyLimit,
   singleFileUpload("file"),
   async (req, res) => {
     const userId = res.locals.userId as string;

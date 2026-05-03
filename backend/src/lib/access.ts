@@ -58,6 +58,18 @@ export async function checkProjectAccess(
     return { ok: false };
 }
 
+export async function ensureProjectIdIsAccessibleForCreate(
+    projectId: string | null | undefined,
+    userId: string,
+    userEmail: string | null | undefined,
+    db: Db,
+): Promise<{ ok: true; projectId: string | null } | { ok: false }> {
+    if (!projectId) return { ok: true, projectId: null };
+    const access = await checkProjectAccess(projectId, userId, userEmail, db);
+    if (!access.ok) return { ok: false };
+    return { ok: true, projectId };
+}
+
 /**
  * Check whether the current user can access a document the caller has
  * already loaded (saves a round-trip vs. having the helper re-fetch).
@@ -135,7 +147,7 @@ export async function listAccessibleProjectIds(
             ? db
                   .from("projects")
                   .select("id")
-                  .contains("shared_with", [userEmail])
+                  .contains("shared_with", JSON.stringify([userEmail]))
                   .neq("user_id", userId)
             : Promise.resolve({ data: [] as { id: string }[] }),
     ]);

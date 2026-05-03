@@ -12,7 +12,10 @@ import {
 } from "../lib/chatTools";
 import { completeText } from "../lib/llm";
 import { getUserApiKeys, getUserModelSettings } from "../lib/userSettings";
-import { checkProjectAccess } from "../lib/access";
+import {
+    checkProjectAccess,
+    ensureProjectIdIsAccessibleForCreate,
+} from "../lib/access";
 
 export const chatRouter = Router();
 
@@ -52,11 +55,20 @@ chatRouter.get("/", requireAuth, async (req, res) => {
 // POST /chat/create
 chatRouter.post("/create", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
     const projectId: string | null = req.body.project_id ?? null;
     const db = createServerSupabase();
+    const access = await ensureProjectIdIsAccessibleForCreate(
+        projectId,
+        userId,
+        userEmail,
+        db,
+    );
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Project not found" });
     const { data, error } = await db
         .from("chats")
-        .insert({ user_id: userId, project_id: projectId ?? undefined })
+        .insert({ user_id: userId, project_id: access.projectId ?? undefined })
         .select("id")
         .single();
 
@@ -323,14 +335,6 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         model?: string;
     };
 
-    console.log("[chat/stream] incoming request", {
-        userId,
-        chat_id,
-        project_id,
-        model,
-        messageCount: messages?.length,
-    });
-
     const userEmail = res.locals.userEmail as string | undefined;
     const db = createServerSupabase();
     let chatId = chat_id ?? null;
@@ -387,8 +391,6 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         chatTitle = newChat.title;
     }
 
-    console.log("[chat/stream] resolved chatId", chatId);
-
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (lastUser) {
         await db.from("chat_messages").insert({
@@ -420,12 +422,6 @@ chatRouter.post("/", requireAuth, async (req, res) => {
 
     const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 
-    console.log("[chat/stream] starting LLM stream", {
-        apiMessageCount: apiMessages.length,
-        docCount: Object.keys(docIndex).length,
-        workflowCount: Object.keys(workflowStore).length,
-    });
-
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -450,11 +446,6 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             model,
             apiKeys,
             projectId: project_id ?? null,
-        });
-
-        console.log("[chat/stream] LLM stream finished", {
-            fullTextLen: fullText?.length ?? 0,
-            eventCount: events?.length ?? 0,
         });
 
         const annotations = extractAnnotations(fullText, docIndex, events);

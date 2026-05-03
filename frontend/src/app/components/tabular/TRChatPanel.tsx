@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownUrl } from "@/lib/safeMarkdown";
 import {
     X,
     Clock,
@@ -117,7 +118,10 @@ function ReasoningBlock({
             </button>
             {(isOpen || isStreaming) && (
                 <div className="mt-1.5 ml-[14px] text-sm text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        urlTransform={safeMarkdownUrl}
+                    >
                         {text}
                     </ReactMarkdown>
                 </div>
@@ -313,6 +317,7 @@ function TRAssistantMessage({
         >
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                urlTransform={safeMarkdownUrl}
                 components={{
                     p: ({ node, ...props }) => (
                         <p className="mb-2 leading-6" {...props} />

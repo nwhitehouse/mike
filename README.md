@@ -16,6 +16,7 @@ AI legal platform for in-house and outside counsel: chat over your documents, ru
 - [Production deployment](#production-deployment)
 - [Domain & email setup (`tryolava.ai`)](#domain--email-setup-tryolavaai)
 - [Auth, RLS, and the email-domain whitelist](#auth-rls-and-the-email-domain-whitelist)
+- [Security hardening](#security-hardening)
 - [Models & the Olava-001 backend](#models--the-olava-001-backend)
 - [Storage](#storage)
 - [Common gotchas](#common-gotchas)
@@ -283,7 +284,35 @@ The SQL file is `CREATE OR REPLACE … DROP TRIGGER IF EXISTS …` — safe to r
 
 ### RLS
 
-Every user-owned table has policies of the form `user_id = auth.uid()`. The backend runs with the service-role key but consciously scopes queries to the authenticated user (resolved from the JWT in `middleware/auth.ts`). The frontend uses the anon key + RLS for direct Supabase reads.
+Apply the Supabase migrations in order:
+
+1. `backend/migrations/000_one_shot_schema.sql`
+2. `backend/migrations/001_email_domain_whitelist.sql`
+3. `backend/migrations/002_enable_rls_tenant_tables.sql`
+
+The backend runs with the service-role key, so route handlers still perform
+app-layer authorization after resolving the caller from the Supabase JWT in
+`middleware/auth.ts`. RLS is the defense-in-depth layer for direct Supabase
+client access and missed app-layer checks. The hardening migration covers
+projects, folders, documents, versions, edits, chats, workflows, workflow
+shares, tabular reviews, cells, and tabular chat messages.
+
+---
+
+## Security hardening
+
+The current security hardening rollout is documented in
+[SECURITY_HARDENING.md](SECURITY_HARDENING.md). It covers:
+
+- removed model-content/raw-stream logging;
+- required `DOWNLOAD_SIGNING_SECRET`;
+- tightened project/document ID authorization checks;
+- RLS migration rollout;
+- stricter CORS, `helmet`, JSON limits, and upload concurrency limits;
+- frontend markdown/DOCX render sanitization;
+- dependency audit status and remaining moderate advisory rationale.
+
+For dependency audit details, see [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 
 ---
 
@@ -332,7 +361,7 @@ Bucket name is `R2_BUCKET_NAME` (default `mike`). Object keys are namespaced as 
 
 ## Common gotchas
 
-- **CORS rejecting `www.tryolava.ai`** — `backend/src/index.ts` explicitly allows `tryolava.ai`, `*.tryolava.ai`, `*.vercel.app`, `localhost:9000`, and the `FRONTEND_URL` env. To add a new public host, edit the origin function in `index.ts`.
+- **CORS rejecting a frontend host** — production CORS is explicit. Set `FRONTEND_URL` to the canonical frontend origin and add any extra known origins through `ADDITIONAL_CORS_ORIGINS`. Localhost defaults are only allowed outside production.
 - **Mimecast killing signup emails** — see [Auth, RLS, and the email-domain whitelist](#auth-rls-and-the-email-domain-whitelist). The current workaround is to leave email confirmation off; long-term ask the corporate IT admin to whitelist `mail.tryolava.ai`.
 - **Vercel "Require Verified Commits"** — silently rejects deploys from unsigned commits even though the GitHub status shows green. Disable per-project or sign commits.
 - **Vercel vulnerable-Next.js block** — bump `next` promptly when Vercel surfaces a security advisory; don't try to bypass.
@@ -345,13 +374,18 @@ Bucket name is `R2_BUCKET_NAME` (default `mike`). Object keys are namespaced as 
 
 ## Testing changes
 
-There is no automated test suite (yet — see [Known follow-ups](#known-follow-ups)). The verification path used during development:
+The backend now has a small security regression suite. The general verification path is:
 
-1. `npm run build --prefix backend` — TypeScript compiles cleanly.
-2. `npm run build --prefix frontend` — Next.js build + lint passes.
-3. Run both dev servers, sign up with a fresh email in incognito, upload a small PDF, run an extraction, ask the assistant to draft an NDA, generate a tracked-change DOCX.
-4. Watch backend logs for `[olava] iter=… content_chars=… reasoning_chars=… tool_calls=…` lines — confirms the model is responding and tool calls are being parsed.
-5. Smoke-test on the Vercel preview URL before promoting to production.
+1. `npm --prefix backend test` — security regression checks.
+2. `npm --prefix backend run build` — TypeScript compiles cleanly.
+3. `npm --prefix frontend run build` — Next.js production build.
+4. `npm --prefix frontend exec tsc -- --noEmit --pretty false` — frontend type check.
+5. `npm --prefix backend audit --audit-level=moderate` and `npm --prefix frontend audit --audit-level=moderate`.
+6. Run both dev servers, sign up with a fresh email in incognito, upload a small PDF, run an extraction, ask the assistant to draft an NDA, generate a tracked-change DOCX.
+7. Smoke-test on the Vercel preview URL before promoting to production.
+
+`npm run lint --prefix frontend` is not currently a clean release gate because
+the repo has existing lint debt; see [Known follow-ups](#known-follow-ups).
 
 For UI changes, **start the dev server and click through the actual feature in a browser** before claiming success. The TypeScript compiler proves syntax, not feature behavior.
 
@@ -366,7 +400,9 @@ A backlog for whoever picks this up:
 - **Bucket rename** — `R2_BUCKET_NAME=mike` in production. Renaming the bucket requires a data migration of every storage key.
 - **Strip dead Anthropic/Gemini code paths** — `backend/src/lib/llm/{claude,gemini}.ts` and the dispatch in `llm/index.ts` are unreachable from the UI. Safe to delete in one PR; do it when you're confident multi-provider isn't coming back.
 - **Custom domain rollout** — the production custom domain (`tryolava.ai`) is wired up. If it ever gets retired, remove the `tryolava.ai` allowance from the CORS origin function in `backend/src/index.ts` and update `FRONTEND_URL` on Railway.
-- **Test suite** — no Jest / Vitest / Playwright. Even smoke-test coverage of the chat happy path + tabular extraction would help.
+- **Frontend lint debt** — `npm run lint --prefix frontend` currently fails on existing repo-wide issues. Clean this up so lint can become a required release gate.
+- **Live RLS tests** — backend tests cover static migration/policy presence and app-layer helpers, but there is not yet a live Supabase JWT test using owner/shared/unrelated users.
+- **Broader E2E coverage** — add Playwright or equivalent coverage for the chat happy path, tabular extraction, upload limits, and cross-tenant denial flows.
 - **Email deliverability for corporate gateways** — long-term, Olava emails should be sent from a domain that already has Mimecast reputation (e.g. an Onit subdomain), not from a freshly-registered `tryolava.ai` subdomain.
 - **Observability** — no error tracking (Sentry/Datadog/etc.) and no structured logs. Backend logs are `console.log` strings.
 

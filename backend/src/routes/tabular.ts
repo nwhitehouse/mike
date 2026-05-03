@@ -14,6 +14,7 @@ import { completeText, streamChatWithTools } from "../lib/llm";
 import { getUserApiKeys, getUserModelSettings } from "../lib/userSettings";
 import {
     checkProjectAccess,
+    ensureDocAccess,
     ensureReviewAccess,
     listAccessibleProjectIds,
 } from "../lib/access";
@@ -44,6 +45,49 @@ function formatPromptSuffix(format?: string, tags?: string[]): string {
 }
 
 export const tabularRouter = Router();
+
+type AccessDocRow = {
+    id: string;
+    user_id: string;
+    project_id: string | null;
+};
+
+export async function requireAccessibleDocumentIds(
+    documentIds: string[],
+    userId: string,
+    userEmail: string | undefined,
+    db: ReturnType<typeof createServerSupabase>,
+): Promise<{ ok: true; ids: string[] } | { ok: false }> {
+    const ids = [...new Set(documentIds.filter(Boolean))];
+    if (ids.length === 0) return { ok: true, ids: [] };
+
+    const { data: docs, error } = await db
+        .from("documents")
+        .select("id, user_id, project_id")
+        .in("id", ids);
+    if (error || !docs || docs.length !== ids.length) return { ok: false };
+
+    for (const doc of docs as AccessDocRow[]) {
+        const access = await ensureDocAccess(doc, userId, userEmail, db);
+        if (!access.ok) return { ok: false };
+    }
+    return { ok: true, ids };
+}
+
+async function filterAccessibleDocuments<T extends AccessDocRow>(
+    docs: T[],
+    userId: string,
+    userEmail: string | undefined,
+    db: ReturnType<typeof createServerSupabase>,
+): Promise<T[]> {
+    const checks = await Promise.all(
+        docs.map(async (doc) => ({
+            doc,
+            access: await ensureDocAccess(doc, userId, userEmail, db),
+        })),
+    );
+    return checks.filter((x) => x.access.ok).map((x) => x.doc);
+}
 
 // GET /tabular-review
 tabularRouter.get("/", requireAuth, async (req, res) => {
@@ -182,6 +226,17 @@ tabularRouter.post("/", requireAuth, async (req, res) => {
         };
 
     const db = createServerSupabase();
+    if (!Array.isArray(document_ids))
+        return void res.status(400).json({ detail: "document_ids is required" });
+    const docAccess = await requireAccessibleDocumentIds(
+        document_ids,
+        userId,
+        userEmail,
+        db,
+    );
+    if (!docAccess.ok)
+        return void res.status(404).json({ detail: "Document not found" });
+
     if (project_id) {
         const access = await checkProjectAccess(
             project_id,
@@ -208,7 +263,7 @@ tabularRouter.post("/", requireAuth, async (req, res) => {
             .status(500)
             .json({ detail: error?.message ?? "Failed to create review" });
 
-    const cells = document_ids.flatMap((docId) =>
+    const cells = docAccess.ids.flatMap((docId) =>
         columns_config.map((col) => ({
             review_id: review.id,
             document_id: docId,
@@ -317,7 +372,10 @@ tabularRouter.get("/:reviewId", requireAuth, async (req, res) => {
     const docIds = [...new Set((cells ?? []).map((c) => c.document_id))];
     const docsResult =
         docIds.length > 0
-            ? await db.from("documents").select("*").in("id", docIds)
+            ? await db
+                  .from("documents")
+                  .select("*")
+                  .in("id", docIds)
             : review.project_id
               ? await db
                     .from("documents")
@@ -326,13 +384,23 @@ tabularRouter.get("/:reviewId", requireAuth, async (req, res) => {
                     .order("created_at", { ascending: true })
               : { data: [] as Record<string, unknown>[] };
 
+    const accessibleDocs = await filterAccessibleDocuments(
+        (docsResult.data ?? []) as (Record<string, unknown> & AccessDocRow)[],
+        userId,
+        userEmail,
+        db,
+    );
+    const accessibleDocIds = new Set(accessibleDocs.map((doc) => doc.id));
+
     res.json({
         review: { ...review, is_owner: access.isOwner },
-        cells: (cells ?? []).map((cell) => ({
-            ...cell,
-            content: parseCellContent(cell.content),
-        })),
-        documents: docsResult.data ?? [],
+        cells: (cells ?? [])
+            .filter((cell) => accessibleDocIds.has(cell.document_id))
+            .map((cell) => ({
+                ...cell,
+                content: parseCellContent(cell.content),
+            })),
+        documents: accessibleDocs,
     });
 });
 
@@ -461,6 +529,16 @@ tabularRouter.patch("/:reviewId", requireAuth, async (req, res) => {
     );
     if (!access.ok)
         return void res.status(404).json({ detail: "Review not found" });
+    if (typeof updates.project_id === "string" && updates.project_id) {
+        const projectAccess = await checkProjectAccess(
+            updates.project_id,
+            userId,
+            userEmail,
+            db,
+        );
+        if (!projectAccess.ok)
+            return void res.status(404).json({ detail: "Project not found" });
+    }
     if (sharedWithUpdate !== undefined) {
         if (!access.isOwner)
             return void res
@@ -498,7 +576,17 @@ tabularRouter.patch("/:reviewId", requireAuth, async (req, res) => {
 
         if (Array.isArray(req.body.document_ids)) {
             // document_ids is the new source of truth — delete removed docs' cells
-            const newDocIds = req.body.document_ids as string[];
+            const docAccess = await requireAccessibleDocumentIds(
+                req.body.document_ids as string[],
+                userId,
+                userEmail,
+                db,
+            );
+            if (!docAccess.ok)
+                return void res
+                    .status(404)
+                    .json({ detail: "Document not found" });
+            const newDocIds = docAccess.ids;
             const existingDocIds = (existingCells ?? []).map(
                 (cell) => cell.document_id,
             );
@@ -720,10 +808,18 @@ tabularRouter.post(
 
         const { data: doc } = await db
             .from("documents")
-            .select("id, filename, file_type")
+            .select("id, filename, file_type, user_id, project_id")
             .eq("id", document_id)
             .single();
         if (!doc)
+            return void res.status(404).json({ detail: "Document not found" });
+        const docAccess = await ensureDocAccess(
+            doc as AccessDocRow,
+            userId,
+            userEmail,
+            db,
+        );
+        if (!docAccess.ok)
             return void res.status(404).json({ detail: "Document not found" });
         const docActive = await loadActiveVersion(document_id, db);
 
@@ -828,16 +924,26 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
     if (docIds.length > 0) {
         const { data } = await db
             .from("documents")
-            .select("id, filename, file_type, page_count")
+            .select("id, filename, file_type, page_count, user_id, project_id")
             .in("id", docIds);
-        docs = data ?? [];
+        docs = await filterAccessibleDocuments(
+            (data ?? []) as (Record<string, unknown> & AccessDocRow)[],
+            userId,
+            userEmail,
+            db,
+        );
     } else if (review.project_id) {
         const { data } = await db
             .from("documents")
-            .select("id, filename, file_type, page_count")
+            .select("id, filename, file_type, page_count, user_id, project_id")
             .eq("project_id", review.project_id)
             .order("created_at", { ascending: true });
-        docs = data ?? [];
+        docs = await filterAccessibleDocuments(
+            (data ?? []) as (Record<string, unknown> & AccessDocRow)[],
+            userId,
+            userEmail,
+            db,
+        );
     }
 
     const { tabular_model, api_keys } = await getUserModelSettings(userId, db);
@@ -1211,11 +1317,17 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
     if (docIds.length > 0) {
         const { data } = await db
             .from("documents")
-            .select("id, filename")
+            .select("id, filename, user_id, project_id")
             .in("id", docIds)
             .order("created_at", { ascending: true });
-        docs = (data ?? []) as { id: string; filename: string }[];
+        docs = await filterAccessibleDocuments(
+            (data ?? []) as (AccessDocRow & { filename: string })[],
+            userId,
+            userEmail,
+            db,
+        );
     }
+    const accessibleDocIds = new Set(docs.map((doc) => doc.id));
 
     const sortedColumns = (
         (review.columns_config ?? []) as { index: number; name: string }[]
@@ -1225,10 +1337,12 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
         columns: sortedColumns,
         documents: docs,
         cells: new Map(
-            (cells ?? []).map((c: any) => [
-                `${c.column_index}:${c.document_id}`,
-                parseCellContent(c.content),
-            ]),
+            (cells ?? [])
+                .filter((c: any) => accessibleDocIds.has(c.document_id))
+                .map((c: any) => [
+                    `${c.column_index}:${c.document_id}`,
+                    parseCellContent(c.content),
+                ]),
         ),
     };
 

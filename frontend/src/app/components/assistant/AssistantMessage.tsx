@@ -17,6 +17,7 @@ import type {
 import { EditCard, applyOptimisticResolution } from "./EditCard";
 import { PreResponseWrapper } from "../shared/PreResponseWrapper";
 import { supabase } from "@/lib/supabase";
+import { safeExternalHref, safeMarkdownUrl } from "@/lib/safeMarkdown";
 
 /**
  * Card rendered above the per-edit EditCards when a message produced
@@ -404,6 +405,7 @@ function ReasoningBlock({
                 <div className="mt-2 ml-[14px] text-sm font-serif text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm">
                     <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
+                        urlTransform={safeMarkdownUrl}
                         components={{
                             code: ({ node, ...props }) => (
                                 <code
@@ -837,6 +839,7 @@ function MarkdownContent({
                     remarkGfm,
                 ]}
                 rehypePlugins={[rehypeKatex]}
+                urlTransform={safeMarkdownUrl}
                 components={{
                     table: ({ node, ...props }) => (
                         <div className="overflow-x-auto my-4">
@@ -965,17 +968,21 @@ function MarkdownContent({
                             {...props}
                         />
                     ),
-                    a: ({ node, href, children, ...props }) => (
-                        <a
-                            href={href}
-                            className="text-blue-600 hover:text-blue-700 underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            {...props}
-                        >
-                            {children}
-                        </a>
-                    ),
+                    a: ({ node, href, children, ...props }) => {
+                        const safeHref = safeExternalHref(href);
+                        if (!safeHref) return <span>{children}</span>;
+                        return (
+                            <a
+                                href={safeHref}
+                                className="text-blue-600 hover:text-blue-700 underline"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                {...props}
+                            >
+                                {children}
+                            </a>
+                        );
+                    },
                     hr: ({ node, ...props }) => (
                         <hr className="my-6 border-gray-200" {...props} />
                     ),

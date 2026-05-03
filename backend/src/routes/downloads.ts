@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { buildContentDisposition, downloadFile } from "../lib/storage";
-import { verifyDownload } from "../lib/downloadTokens";
+import { isDownloadSigningConfigured, verifyDownload } from "../lib/downloadTokens";
 import { ensureDocAccess } from "../lib/access";
 
 export const downloadsRouter = Router();
@@ -21,6 +21,11 @@ function contentTypeFor(filename: string): string {
 downloadsRouter.get("/:token", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
+    if (!isDownloadSigningConfigured()) {
+        return void res
+            .status(503)
+            .json({ detail: "Download links are not configured" });
+    }
     const info = verifyDownload(req.params.token);
     if (!info)
         return void res.status(404).json({ detail: "Invalid link" });

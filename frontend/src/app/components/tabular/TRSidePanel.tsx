@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { ColumnConfig, MikeDocument, TabularCell } from "../shared/types";
 import { preprocessCitations, type ParsedCitation } from "./citation-utils";
+import { safeExternalHref, safeMarkdownUrl } from "@/lib/safeMarkdown";
 import { getPillClass } from "./pillUtils";
 import { DocView } from "../shared/DocView";
 import { DocxView } from "../shared/DocxView";
@@ -371,6 +372,7 @@ export function MarkdownContent({
     return (
         <ReactMarkdown
             remarkPlugins={[remarkGfm]}
+            urlTransform={safeMarkdownUrl}
             components={{
                 p: ({ node, ...props }) =>
                     inline ? (
@@ -400,17 +402,21 @@ export function MarkdownContent({
                 em: ({ node, ...props }) => (
                     <em className="italic" {...props} />
                 ),
-                a: ({ node, href, children, ...props }) => (
-                    <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-700 underline"
-                        {...props}
-                    >
-                        {children}
-                    </a>
-                ),
+                a: ({ node, href, children, ...props }) => {
+                    const safeHref = safeExternalHref(href);
+                    if (!safeHref) return <span>{children}</span>;
+                    return (
+                        <a
+                            href={safeHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-700 underline"
+                            {...props}
+                        >
+                            {children}
+                        </a>
+                    );
+                },
                 code: ({ node, children: codeChildren, ...props }) => {
                     const t = String(codeChildren);
                     const citMatch = t.match(/^§c(\d+)§$/);

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { MikeIcon } from "@/components/chat/mike-icon";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { supabase } from "@/lib/supabase";
+import { sanitizeRenderedHtml } from "@/lib/sanitizeHtml";
 import {
     clearDocxQuoteHighlights,
     highlightDocxQuote,
@@ -370,6 +371,7 @@ export function DocxView({
                     renderChanges: true,
                     experimental: true,
                 });
+                sanitizeRenderedHtml(containerEl);
                 if (cancelled) return;
                 await tagWIdsOnRenderedDom(
                     containerEl,

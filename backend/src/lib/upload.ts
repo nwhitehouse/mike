@@ -14,6 +14,33 @@ const memoryUpload = multer({
   },
 });
 
+let activeUploads = 0;
+
+function maxConcurrentUploads(): number {
+  const parsed = Number.parseInt(process.env.MAX_CONCURRENT_UPLOADS ?? "3", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
+
+export const uploadConcurrencyLimit: RequestHandler = (_req, res, next) => {
+  const max = maxConcurrentUploads();
+  if (activeUploads >= max) {
+    return void res.status(429).json({
+      detail: "Too many uploads in progress. Please retry shortly.",
+    });
+  }
+
+  activeUploads++;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeUploads = Math.max(0, activeUploads - 1);
+  };
+  res.on("finish", release);
+  res.on("close", release);
+  next();
+};
+
 export function singleFileUpload(fieldName: string): RequestHandler {
   return (req, res, next) => {
     memoryUpload.single(fieldName)(req, res, (err) => {

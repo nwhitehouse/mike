@@ -157,11 +157,6 @@ export async function streamOlava(
             process.env.OLAVA_ENABLE_TOOLS?.toLowerCase() === "true";
         if (tools.length && allowTools) {
             body.tools = tools;
-        } else if (tools.length) {
-            console.log(
-                `[olava] dropping ${tools.length} tools — set OLAVA_ENABLE_TOOLS=true ` +
-                    `if your vLLM server is running with --enable-auto-tool-choice.`,
-            );
         }
 
         const resp = await fetch(endpoint(), {
@@ -251,19 +246,6 @@ export async function streamOlava(
         if (text) callbacks.onContentDelta?.(text);
         fullText += text;
 
-        console.log(
-            `[olava] iter=${iter} model=${model} content_chars=${text.length} ` +
-                `reasoning_chars=${reasoningChars} tool_calls=${accCalls.size} ` +
-                `finish_reason=${finishReason ?? "?"}`,
-        );
-        // Truncated dump of the actual response text — invaluable when the
-        // model returns very short content (e.g. refusals, malformed tool
-        // attempts, post-strip empties) and we need to see why.
-        if (text.length < 500) {
-            console.log(`[olava] text=${JSON.stringify(text)}`);
-        } else {
-            console.log(`[olava] text_head=${JSON.stringify(text.slice(0, 300))}`);
-        }
         if (finishReason === "length") {
             console.warn(
                 `[olava] WARNING: stopped due to max_tokens=${maxTokens()}. ` +
@@ -397,7 +379,6 @@ async function nonStreamOlavaWithTools(
         });
 
         let textForUser = stripped;
-        let parsedFromContent = false;
         if (toolCalls.length === 0) {
             const parsed = parseCustomToolCall(rawContent);
             if (parsed && parsed.name) {
@@ -408,22 +389,6 @@ async function nonStreamOlavaWithTools(
                         input: parsed.input,
                     },
                 ];
-                parsedFromContent = true;
-                // Log the parsed input keys + sizes so we can see whether
-                // the model actually emitted the params we expect (e.g.
-                // generate_docx with sections) vs. only a subset.
-                const keySummary = Object.entries(parsed.input)
-                    .map(([k, v]) => {
-                        if (Array.isArray(v))
-                            return `${k}=array[${v.length}]`;
-                        if (typeof v === "string")
-                            return `${k}=str[${v.length}]`;
-                        return `${k}=${typeof v}`;
-                    })
-                    .join(" ");
-                console.log(
-                    `[olava] parsed tool_call name=${parsed.name} ${keySummary}`,
-                );
                 // Show the user only the prose preamble that came BEFORE
                 // the <tool_call> tokens — the markup itself shouldn't
                 // appear in the chat transcript.
@@ -440,12 +405,6 @@ async function nonStreamOlavaWithTools(
         }
         toolCalls.forEach((c) => callbacks.onToolCallStart?.(c));
 
-        console.log(
-            `[olava] non-stream iter=${iter} model=${model} ` +
-                `content_chars=${textForUser.length} reasoning_chars=${reasoningChars} ` +
-                `tool_calls=${toolCalls.length}${parsedFromContent ? " (parsed-from-content)" : ""} ` +
-                `finish_reason=${finishReason}`,
-        );
         const text = textForUser;
 
         if (toolCalls.length === 0 || !runTools) break;

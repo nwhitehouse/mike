@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownUrl } from "@/lib/safeMarkdown";
 import type { MikeDocument, MikeWorkflow } from "../shared/types";
 import { createTabularReview } from "@/app/lib/mikeApi";
 import { useRouter } from "next/navigation";
@@ -126,6 +127,7 @@ function MarkdownBody({ content }: { content: string }) {
     return (
         <ReactMarkdown
             remarkPlugins={[remarkGfm]}
+            urlTransform={safeMarkdownUrl}
             components={{
                 h1: ({ children }) => (
                     <h1 className="text-base font-semibold text-gray-900 mt-4 mb-1 first:mt-0">
