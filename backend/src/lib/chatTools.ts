@@ -255,6 +255,48 @@ export const WORKFLOW_TOOLS = [
     },
 ];
 
+// Conditionally appended to a chat's tool schema when the user has selected
+// legal sources via the "Files and Sources" picker. Hard-gated: when no
+// sources are selected, this tool is not in the schema and the model can't
+// call it.
+export const LEGAL_TOOLS = [
+    {
+        type: "function",
+        function: {
+            name: "legal_search",
+            description:
+                "Search US legal databases for case law, federal legislation, regulations, and executive orders. " +
+                "Sources: CourtListener (court opinions), GovInfo (federal legislation), " +
+                "Federal Register (proposed and final rules, executive orders), eCFR (Code of Federal Regulations).",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description:
+                            "Legal search query (e.g. 'reasonable accommodation ADA employment').",
+                    },
+                    sources: {
+                        type: "array",
+                        items: {
+                            type: "string",
+                            enum: [
+                                "courtlistener",
+                                "govinfo",
+                                "federal_register",
+                                "ecfr",
+                            ],
+                        },
+                        description:
+                            "Which databases to search. Restrict to the user's selected sources when given via the system prompt.",
+                    },
+                },
+                required: ["query"],
+            },
+        },
+    },
+];
+
 export const TOOLS = [
     {
         type: "function",
@@ -1473,6 +1515,7 @@ export async function runToolCalls(
     docIndex?: DocIndex,
     turnEditState?: TurnEditState,
     projectId?: string | null,
+    selectedLegalSources?: string[],
 ): Promise<{
     toolResults: unknown[];
     docsRead: { filename: string; document_id?: string }[];
@@ -1547,6 +1590,51 @@ export async function runToolCalls(
                 });
             }
             toolResults.push({ role: "tool", tool_call_id: tc.id, content });
+
+        } else if (tc.function.name === "legal_search") {
+            const query = (args.query as string) ?? "";
+            const requestedSources = Array.isArray(args.sources)
+                ? (args.sources as string[])
+                : undefined;
+
+            // Hard gate: clamp to the user's selection when present. The
+            // tool wouldn't be in the schema at all if no sources were
+            // selected (see runLLMStream below), but defend against the
+            // model passing an out-of-policy `sources` arg even so.
+            const allowed = (selectedLegalSources ?? []).length
+                ? selectedLegalSources!
+                : undefined;
+            const resolved = (() => {
+                if (!allowed) return requestedSources; // shouldn't happen — log + fallback
+                if (!requestedSources || !requestedSources.length)
+                    return allowed;
+                const intersection = requestedSources.filter((s) =>
+                    allowed.includes(s),
+                );
+                return intersection.length ? intersection : allowed;
+            })();
+
+            const { legalSearch, formatLegalResultsForModel } = await import(
+                "./legalSearch"
+            );
+            try {
+                const results = await legalSearch(
+                    query,
+                    resolved as Parameters<typeof legalSearch>[1],
+                );
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: formatLegalResultsForModel(results),
+                });
+            } catch (err) {
+                console.warn("[legal_search] failed:", err);
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: "Legal search failed; please try again.",
+                });
+            }
 
         } else if (tc.function.name === "list_documents") {
             const list = Array.from(docStore.entries()).map(
@@ -2289,17 +2377,35 @@ export async function runLLMStream(params: {
      * generated docs still get persisted, but as standalone documents.
      */
     projectId?: string | null;
+    /**
+     * Per-turn input gating from the chat input's "Files and Sources"
+     * picker. When `legal` is non-empty, the `legal_search` tool is
+     * appended to the schema and a system-prompt line restricts the
+     * model's `sources` arg to that list. Empty/undefined → tool is not
+     * in the schema at all (hard gate).
+     */
+    sources?: { legal?: string[] };
 }): Promise<{ fullText: string; events: AssistantEvent[] }> {
-    const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId } = params;
-    const activeTools = extraTools?.length
-        ? [...TOOLS, ...WORKFLOW_TOOLS, ...extraTools]
-        : [...TOOLS, ...WORKFLOW_TOOLS];
+    const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId, sources } = params;
+    const selectedLegalSources = sources?.legal ?? [];
+    const activeTools = [
+        ...TOOLS,
+        ...WORKFLOW_TOOLS,
+        ...(extraTools?.length ? extraTools : []),
+        ...(selectedLegalSources.length ? LEGAL_TOOLS : []),
+    ];
 
     // Extract system prompt; pass remaining turns to the adapter as
     // plain user/assistant messages.
     const rawMsgs = apiMessages as { role: string; content: string | null }[];
-    const systemPrompt =
+    const baseSystemPrompt =
         rawMsgs[0]?.role === "system" ? (rawMsgs[0].content ?? "") : "";
+    const legalSourceHint = selectedLegalSources.length
+        ? `\n\nLegal research sources selected by the user: ${selectedLegalSources.join(", ")}. ` +
+          "When using the legal_search tool, set the `sources` argument to a subset of this list. " +
+          "Do not search any other legal databases."
+        : "";
+    const systemPrompt = baseSystemPrompt + legalSourceHint;
     const chatMessages: LlmMessage[] = rawMsgs
         .filter((m) => m.role !== "system")
         .map((m) => ({
@@ -2452,6 +2558,7 @@ export async function runLLMStream(params: {
                     docIndex,
                     turnEditState,
                     projectId,
+                    selectedLegalSources,
                 );
             for (const r of docsRead) {
                 events.push({

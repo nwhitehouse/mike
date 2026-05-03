@@ -17,7 +17,7 @@ import {
     Square,
     X,
 } from "lucide-react";
-import { AddDocButton } from "./AddDocButton";
+import { FilesAndSourcesButton } from "./FilesAndSourcesButton";
 import { AddDocumentsModal } from "../shared/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
@@ -39,7 +39,7 @@ interface Props {
     onSubmit: (message: MikeMessage) => void;
     onCancel: () => void;
     isLoading: boolean;
-    hideAddDocButton?: boolean;
+    hideFilesAndSourcesButton?: boolean;
     hideWorkflowButton?: boolean;
     onProjectsClick?: () => void;
     projectName?: string;
@@ -51,7 +51,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         onSubmit,
         onCancel,
         isLoading,
-        hideAddDocButton,
+        hideFilesAndSourcesButton,
         hideWorkflowButton,
         onProjectsClick,
         projectName,
@@ -61,6 +61,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 ) {
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<MikeDocument[]>([]);
+    const [selectedLegalSources, setSelectedLegalSources] = useState<string[]>([]);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
         id: string;
         title: string;
@@ -133,6 +134,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         setAttachedDocs([]);
         const wf = selectedWorkflow;
         setSelectedWorkflow(null);
+        const turnSources =
+            selectedLegalSources.length > 0
+                ? { legal: selectedLegalSources }
+                : undefined;
+        setSelectedLegalSources([]);
 
         onSubmit?.({
             role: "user",
@@ -140,6 +146,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             files: files.length > 0 ? files : undefined,
             workflow: wf ?? undefined,
             model,
+            sources: turnSources,
         });
     };
 
@@ -233,13 +240,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                     {/* Controls */}
                     <div className="flex items-center justify-between md:p-2.5 p-2">
                         <div className="flex items-center gap-1">
-                            {!hideAddDocButton && (
-                                <AddDocButton
+                            {!hideFilesAndSourcesButton && (
+                                <FilesAndSourcesButton
                                     onSelectDoc={handleAddDocFromProject}
                                     onBrowseAll={() => setDocSelectorOpen(true)}
                                     selectedDocIds={attachedDocs.map(
                                         (d) => d.id,
                                     )}
+                                    selectedLegalSources={selectedLegalSources}
+                                    onLegalSourcesChange={setSelectedLegalSources}
                                 />
                             )}
                             {onProjectsClick && (

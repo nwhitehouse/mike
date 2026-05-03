@@ -328,11 +328,12 @@ chatRouter.post("/:chatId/generate-title", requireAuth, async (req, res) => {
 // POST /chat — streaming
 chatRouter.post("/", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
-    const { messages, chat_id, project_id, model } = req.body as {
+    const { messages, chat_id, project_id, model, sources } = req.body as {
         messages: ChatMessage[];
         chat_id?: string;
         project_id?: string;
         model?: string;
+        sources?: { legal?: string[] };
     };
 
     const userEmail = res.locals.userEmail as string | undefined;
@@ -446,6 +447,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             model,
             apiKeys,
             projectId: project_id ?? null,
+            sources,
         });
 
         const annotations = extractAnnotations(fullText, docIndex, events);

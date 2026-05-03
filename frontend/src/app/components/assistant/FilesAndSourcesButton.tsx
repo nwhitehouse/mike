@@ -4,20 +4,40 @@ import { useRef, useState } from "react";
 import { PlusIcon, Upload, LayoutGridIcon, Loader2Icon } from "lucide-react";
 import {
     DropdownMenu,
+    DropdownMenuCheckboxItem,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { uploadStandaloneDocument } from "@/app/lib/mikeApi";
 import type { MikeDocument } from "../shared/types";
 
+// Sectioned source picker — extensible: new sections (Knowledge Base,
+// Integrations, EU/UK Law, etc.) drop in here without restructuring.
+const LEGAL_SOURCE_OPTIONS: { key: string; label: string }[] = [
+    { key: "courtlistener", label: "Court Opinions" },
+    { key: "govinfo", label: "Federal Legislation" },
+    { key: "federal_register", label: "Federal Register" },
+    { key: "ecfr", label: "Regulations (CFR)" },
+];
+
 interface Props {
     onSelectDoc: (doc: MikeDocument) => void;
     onBrowseAll: () => void;
     selectedDocIds?: string[];
+    selectedLegalSources?: string[];
+    onLegalSourcesChange?: (sources: string[]) => void;
 }
 
-export function AddDocButton({ onSelectDoc, onBrowseAll, selectedDocIds = [] }: Props) {
+export function FilesAndSourcesButton({
+    onSelectDoc,
+    onBrowseAll,
+    selectedDocIds = [],
+    selectedLegalSources = [],
+    onLegalSourcesChange,
+}: Props) {
     const [isOpen, setIsOpen] = useState(false);
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -39,6 +59,18 @@ export function AddDocButton({ onSelectDoc, onBrowseAll, selectedDocIds = [] }: 
         }
     };
 
+    const toggleLegalSource = (key: string) => {
+        if (!onLegalSourcesChange) return;
+        const isSelected = selectedLegalSources.includes(key);
+        const next = isSelected
+            ? selectedLegalSources.filter((s) => s !== key)
+            : [...selectedLegalSources, key];
+        onLegalSourcesChange(next);
+    };
+
+    const totalCount = selectedDocIds.length + selectedLegalSources.length;
+    const hasSelection = totalCount > 0;
+
     return (
         <>
             <input
@@ -53,29 +85,25 @@ export function AddDocButton({ onSelectDoc, onBrowseAll, selectedDocIds = [] }: 
                 <DropdownMenuTrigger asChild>
                     <button
                         className={`flex items-center gap-1 px-2 h-8 rounded-lg text-sm transition-colors cursor-pointer ${
-                            selectedDocIds.length > 0
+                            hasSelection
                                 ? "text-black hover:bg-gray-100"
                                 : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
                         } ${isOpen ? "bg-gray-100" : ""}`}
-                        title="Add documents"
-                        aria-label="Add documents"
+                        title="Files and sources"
+                        aria-label="Files and sources"
                     >
-                        {selectedDocIds.length > 0 ? (
-                            <span className="font-medium tabular-nums">{selectedDocIds.length}</span>
+                        {hasSelection ? (
+                            <span className="font-medium tabular-nums">{totalCount}</span>
                         ) : (
                             <PlusIcon
                                 className={`h-4 w-4 shrink-0 transition-transform duration-300 ${isOpen ? "rotate-[135deg]" : ""}`}
                             />
                         )}
-                        <span className="hidden sm:inline">
-                            {selectedDocIds.length === 1
-                                ? "Document"
-                                : "Documents"}
-                        </span>
+                        <span className="hidden sm:inline">Files and sources</span>
                     </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
-                    className="w-44 z-50"
+                    className="w-56 z-50"
                     side="bottom"
                     align="start"
                 >
@@ -103,6 +131,26 @@ export function AddDocButton({ onSelectDoc, onBrowseAll, selectedDocIds = [] }: 
                         <LayoutGridIcon className="h-4 w-4 mr-2 text-gray-500" />
                         <span className="text-sm">Browse all</span>
                     </DropdownMenuItem>
+
+                    {onLegalSourcesChange && (
+                        <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-xs text-gray-500 font-normal uppercase tracking-wide">
+                                US Legal Sources
+                            </DropdownMenuLabel>
+                            {LEGAL_SOURCE_OPTIONS.map((src) => (
+                                <DropdownMenuCheckboxItem
+                                    key={src.key}
+                                    checked={selectedLegalSources.includes(src.key)}
+                                    onCheckedChange={() => toggleLegalSource(src.key)}
+                                    onSelect={(e) => e.preventDefault()}
+                                    className="cursor-pointer"
+                                >
+                                    {src.label}
+                                </DropdownMenuCheckboxItem>
+                            ))}
+                        </>
+                    )}
                 </DropdownMenuContent>
             </DropdownMenu>
         </>

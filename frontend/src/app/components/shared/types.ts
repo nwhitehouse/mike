@@ -152,6 +152,13 @@ export interface MikeMessage {
   events?: AssistantEvent[];
   /** Set when streaming failed; rendered as a red error block. */
   error?: string;
+  /**
+   * Per-turn input gating from the chat input's "Files and Sources" picker.
+   * Transient — only set on outgoing user messages, not persisted in the
+   * conversation history. Backend reads from the latest user message to
+   * decide which optional tools (e.g. legal_search) to expose this turn.
+   */
+  sources?: { legal?: string[] };
 }
 
 export interface CitationQuote {

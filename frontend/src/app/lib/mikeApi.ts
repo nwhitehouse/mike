@@ -430,6 +430,7 @@ export async function streamChat(payload: {
     chat_id?: string;
     project_id?: string;
     model?: string;
+    sources?: { legal?: string[] };
     signal?: AbortSignal;
 }): Promise<Response> {
     const { signal, ...body } = payload;

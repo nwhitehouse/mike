@@ -1221,7 +1221,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                             onSubmit={handleSubmit}
                             onCancel={cancel}
                             isLoading={isResponseLoading}
-                            hideAddDocButton
+                            hideFilesAndSourcesButton
                             projectName={project?.name}
                             projectCmNumber={project?.cm_number}
                         />

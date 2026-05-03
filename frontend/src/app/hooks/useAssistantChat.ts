@@ -351,6 +351,7 @@ export function useAssistantChat({
                       messages: apiMessages,
                       chat_id: chatId,
                       model,
+                      sources: message.sources,
                       signal: controller.signal,
                   }));
 
