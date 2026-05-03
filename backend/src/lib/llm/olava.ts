@@ -223,6 +223,84 @@ function parseCustomToolCall(
     return { name, input };
 }
 
+// Single non-streaming completion used as a fallback when streaming finished
+// with finish_reason="tool_calls" but no tool-call info was recoverable from
+// either the structured `delta.tool_calls` channel or the `delta.content`
+// markup. Runs the same request as the streaming iter (same messages, same
+// tools), but with `stream: false` so vLLM emits the markup into
+// `message.content` where parseCustomToolCall can find it. Returns null if
+// the fallback also fails to surface a tool call.
+async function recoverToolCallNonStreaming(args: {
+    model: string;
+    messages: OlavaMessage[];
+    tools: unknown[];
+    iter: number;
+}): Promise<NormalizedToolCall | null> {
+    const { model, messages, tools, iter } = args;
+    try {
+        const resp = await fetch(endpoint(), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0",
+                ...authHeaders(),
+            },
+            body: JSON.stringify({
+                model,
+                messages,
+                stream: false,
+                max_tokens: maxTokens(),
+                tools,
+            }),
+        });
+        if (!resp.ok) return null;
+        const json = (await resp.json()) as {
+            choices?: Array<{
+                message?: {
+                    content?: string | null;
+                    tool_calls?: Array<{
+                        id?: string;
+                        function?: { name?: string; arguments?: string };
+                    }>;
+                };
+            }>;
+        };
+        const message = json.choices?.[0]?.message;
+
+        // Prefer structured tool_calls if vLLM did parse this time.
+        const structured = message?.tool_calls ?? [];
+        if (structured.length > 0) {
+            const tc = structured[0];
+            let input: Record<string, unknown> = {};
+            try {
+                input = tc.function?.arguments
+                    ? JSON.parse(tc.function.arguments)
+                    : {};
+            } catch {
+                /* leave input empty */
+            }
+            return {
+                id: tc.id || `${tc.function?.name || "tool"}-${iter}`,
+                name: tc.function?.name ?? "",
+                input,
+            };
+        }
+
+        // Fall back to parsing the LoRA's custom markup from message.content.
+        const parsed = parseCustomToolCall(message?.content ?? "");
+        if (parsed && parsed.name) {
+            return {
+                id: `${parsed.name}-${iter}-${Date.now()}`,
+                name: parsed.name,
+                input: parsed.input,
+            };
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
 export async function streamOlava(
     params: StreamChatParams,
 ): Promise<StreamChatResult> {
@@ -406,6 +484,27 @@ export async function streamOlava(
                     name: parsed.name,
                     input: parsed.input,
                 });
+            }
+        }
+
+        // vLLM streaming for the Olava LoRA loses tool-call payloads: it
+        // sets finish_reason="tool_calls" but neither populates
+        // delta.tool_calls (so accCalls stays empty) nor includes the
+        // <tool_call> markup in delta.content (rawText comes through as
+        // just whitespace). We can recover by re-issuing this iter as a
+        // single non-streaming request — the markup lands in
+        // message.content and parseCustomToolCall extracts it. One extra
+        // request per tool-using iter, but only on this iter — the prose-
+        // generating iters that come after will stream normally.
+        if (toolCalls.length === 0 && finishReason === "tool_calls") {
+            const recovered = await recoverToolCallNonStreaming({
+                model,
+                messages,
+                tools,
+                iter,
+            });
+            if (recovered) {
+                toolCalls.push(recovered);
             }
         }
 
