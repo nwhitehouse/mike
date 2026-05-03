@@ -80,13 +80,20 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
 
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (lastUser) {
-        await db.from("chat_messages").insert({
-            chat_id: chatId,
-            role: "user",
-            content: lastUser.content,
-            files: lastUser.files ?? null,
-            workflow: lastUser.workflow ?? null,
-        });
+        // Same fix as POST /chat: chat_messages has no `workflow` column,
+        // and Supabase silently rejects the whole insert when it's present
+        // (PGRST204), so user messages were never persisted.
+        const { error: insertError } = await db
+            .from("chat_messages")
+            .insert({
+                chat_id: chatId,
+                role: "user",
+                content: lastUser.content,
+                files: lastUser.files ?? null,
+            });
+        if (insertError) {
+            console.error("[projectChat] user message insert failed", insertError);
+        }
     }
 
     const { docIndex, docStore, folderPaths } = await buildProjectDocContext(

@@ -394,13 +394,22 @@ chatRouter.post("/", requireAuth, async (req, res) => {
 
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (lastUser) {
-        await db.from("chat_messages").insert({
-            chat_id: chatId,
-            role: "user",
-            content: lastUser.content,
-            files: lastUser.files ?? null,
-            workflow: lastUser.workflow ?? null,
-        });
+        // Note: `chat_messages` has no `workflow` column. Earlier code passed
+        // one and Supabase silently rejected the entire insert (PGRST204), so
+        // user messages were never persisted. Drop the field; if workflow
+        // attachment per-message ever needs to be recoverable on chat reload,
+        // add a column in a follow-up migration.
+        const { error: insertError } = await db
+            .from("chat_messages")
+            .insert({
+                chat_id: chatId,
+                role: "user",
+                content: lastUser.content,
+                files: lastUser.files ?? null,
+            });
+        if (insertError) {
+            console.error("[chat/stream] user message insert failed", insertError);
+        }
     }
 
     const { docIndex, docStore } = await buildDocContext(
@@ -451,12 +460,20 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         });
 
         const annotations = extractAnnotations(fullText, docIndex, events);
-        await db.from("chat_messages").insert({
-            chat_id: chatId,
-            role: "assistant",
-            content: events.length ? events : null,
-            annotations: annotations.length ? annotations : null,
-        });
+        const { error: assistantInsertError } = await db
+            .from("chat_messages")
+            .insert({
+                chat_id: chatId,
+                role: "assistant",
+                content: events.length ? events : null,
+                annotations: annotations.length ? annotations : null,
+            });
+        if (assistantInsertError) {
+            console.error(
+                "[chat/stream] assistant message insert failed",
+                assistantInsertError,
+            );
+        }
 
         if (!chatTitle && lastUser?.content) {
             await db
