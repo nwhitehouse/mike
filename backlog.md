@@ -352,3 +352,48 @@ Frontend renders a progress checklist similar to work___'s plan UI in the assist
 - Progress events visible in UI throughout the run.
 - Single-pass path still works when no sources selected (no regression).
 - No regression in feat-001/002/003/004.
+
+---
+
+### feat-006 Reliable document citations via tool-calling
+**Status:** ready
+**Branch:** (not yet created)
+**Priority:** High — current freeform `[N] + <CITATIONS>` format is unreliable on Olava (small-model prompt-adherence gap)
+**Size:** Medium-Large (~2-3 days, mirrors feat-005's SLM-multi-pass pattern)
+
+**Problem.** The current citation system asks Olava to write `[1]`, `[2]` markers in prose and append a `<CITATIONS>` JSON block at the end. Detailed instructions in the system prompt (chatTools.ts:80-130) cover the format. Empirically Olava follows it inconsistently — same chat type, same doc, different turn = sometimes inline `[N]` markers + clickable citations, sometimes just freeform `[Page 5]` text references that aren't clickable. Rooted in: small models follow tool schemas more reliably than freeform output formats (same insight as feat-005's multi-pass).
+
+**Three sub-issues observed in testing 2026-05-04.**
+1. **Inconsistent emission** — some doc-summary turns emit no inline citations at all, just `[Page 5]` text in prose.
+2. **Stuck on first citation** — clicking the second/third citation pill on the same doc doesn't scroll to it; viewer stays on the first. Likely a `quoteKey` / `initialScrollTop` race in `DocView.tsx` when the same DocPanel tab is reused across citations of the same document.
+3. **No hover preview** — citation pills use a plain HTML `title="..."` attribute (browser-native tooltip) instead of a custom popover with the quote and page.
+
+**Proposed fix — three layered changes.**
+
+a) **`add_citation` tool** (the core SLM-friendly fix). Define a tool the model calls explicitly per citation:
+```ts
+add_citation({
+  doc_id: "doc-0",
+  page: 5,           // or "5-6" for span
+  quote: "exact text from doc",
+  marker: 1          // the [N] marker that appears in prose
+})
+```
+Model writes `[N]` in prose AND calls `add_citation` for each. Backend collects calls into the same annotations array `<CITATIONS>` JSON would have produced. Tool-call dispatch is reliable (we already have streaming + recovery for the LoRA's tool-call format from feat-001 + bug-002). Eliminates the "model didn't follow JSON format" failure mode.
+
+b) **Verifier pass** (optional, in research/orchestrator mode only). After synthesis, a quick non-streaming Olava call: "These are the claims in your answer; for each that needs a citation, call add_citation." Cheap (1 extra call per turn) and catches missing citations.
+
+c) **DocView `quoteKey` fix + custom hover popover** (frontend, separable from a/b). Track down why same-doc re-clicks don't scroll; replace the `title=` attribute with a small portal'd popover showing page + quote + clickable "Open" button.
+
+**Files to create/modify (sketch).**
+- backend: `chatTools.ts` (new `add_citation` tool def + dispatch case that pushes to a `citations[]` accumulator returned alongside other tool results), `routes/chat.ts` (merge tool-emitted citations into the assistant message annotations), system prompt update.
+- backend research: optional `verifier.ts` pass after synthesizer.
+- frontend: `AssistantMessage.tsx` (replace `title=` with popover, e.g. Radix Tooltip already used by other primitives), `DocView.tsx` (audit `quoteKey` effect + initialScrollTop handling for the same-doc-different-citation case).
+
+**Success criteria.**
+- Asking Olava to summarise a document reliably produces clickable `[N]` pills (≥9/10 attempts on the same doc).
+- Hovering a pill shows page + quote in a custom popover (no browser-native `title` tooltip).
+- Clicking pill #3 on a doc that's already showing pill #1 scrolls the viewer to pill #3's quote.
+- No regression in tool-using turns or research-mode synthesis.
+
+**Why deferred.** Model behaviour change + viewer-scroll race + popover UI is three separable concerns that deserve their own sprint thread; rolling them into the feat-005 commit would muddle review.

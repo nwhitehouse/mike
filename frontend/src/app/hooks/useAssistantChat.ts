@@ -586,6 +586,67 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "research_step") {
+                            // feat-005 orchestrator progress. Each step
+                            // transitions through running → done|failed|skipped
+                            // — collapse repeats by upserting on key.
+                            const key = data.key as string;
+                            const status = data.status as
+                                | "running"
+                                | "done"
+                                | "failed"
+                                | "skipped";
+                            const meta = data.meta as
+                                | Record<string, unknown>
+                                | undefined;
+                            const existing = eventsRef.current.find(
+                                (e) =>
+                                    e.type === "research_step" &&
+                                    (e as { key: string }).key === key,
+                            );
+                            if (existing) {
+                                updateMatchingEvent(
+                                    (e) =>
+                                        e.type === "research_step" &&
+                                        (e as { key: string }).key === key,
+                                    () => ({
+                                        type: "research_step",
+                                        key: key as
+                                            | "expanding_queries"
+                                            | "searching"
+                                            | "ranking"
+                                            | "extracting"
+                                            | "synthesizing",
+                                        status,
+                                        meta,
+                                    }),
+                                );
+                            } else {
+                                pushEvent({
+                                    type: "research_step",
+                                    key: key as
+                                        | "expanding_queries"
+                                        | "searching"
+                                        | "ranking"
+                                        | "extracting"
+                                        | "synthesizing",
+                                    status,
+                                    meta,
+                                });
+                            }
+                            continue;
+                        }
+
+                        // Transient research progress events (research.*) —
+                        // we keep them out of the persisted events[] array;
+                        // research_step events drive the UI checklist.
+                        if (
+                            typeof data.type === "string" &&
+                            data.type.startsWith("research.")
+                        ) {
+                            continue;
+                        }
+
                         if (data.type === "doc_find_start") {
                             pushEvent({
                                 type: "doc_find",

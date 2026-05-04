@@ -8,6 +8,7 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { Copy, Check, ChevronDown, Download, Loader2 } from "lucide-react";
 import { MikeIcon } from "@/components/chat/mike-icon";
+import { OnitStatusIcon } from "@/components/chat/onit-status-icon";
 import { displayCitationQuote, formatCitationPage } from "../shared/types";
 import type {
     AssistantEvent,
@@ -330,13 +331,7 @@ function ResponseStatus({ status }: { status: StatusState }) {
 
     return (
         <div className="w-full h-9 flex items-center mb-2">
-            <MikeIcon
-                spin={isActive}
-                done={showDone && doneVisible}
-                error={isError}
-                mike={!isError && !(showDone && doneVisible)}
-                size={22}
-            />
+            <OnitStatusIcon spin={isActive} size={22} />
         </div>
     );
 }
@@ -465,14 +460,84 @@ function DocReadBlock({
     );
 }
 
+const RESEARCH_STEP_DONE_LABELS: Record<string, string> = {
+    expanding_queries: "Generated search queries",
+    searching: "Searched sources",
+    ranking: "Ranked results",
+    extracting: "Read top results",
+    synthesizing: "Drafted answer",
+};
+
+const RESEARCH_STEP_RUNNING_LABELS: Record<string, string> = {
+    expanding_queries: "Generating search queries",
+    searching: "Searching sources",
+    ranking: "Ranking results",
+    extracting: "Reading top results",
+    synthesizing: "Drafting answer",
+};
+
+function researchStepDetail(
+    step: Extract<AssistantEvent, { type: "research_step" }>,
+): string {
+    const meta = step.meta ?? {};
+    if (step.key === "expanding_queries" && typeof meta.count === "number")
+        return `${meta.count} queries`;
+    if (step.key === "searching" && typeof meta.unique_count === "number")
+        return `${meta.unique_count} unique results`;
+    if (step.key === "ranking" && typeof meta.top_n === "number")
+        return `top ${meta.top_n} selected`;
+    if (step.key === "extracting" && typeof meta.total === "number") {
+        const done = typeof meta.done === "number" ? meta.done : meta.total;
+        return `${done}/${meta.total}`;
+    }
+    return "";
+}
+
+function ResearchStepBlock({
+    step,
+    showConnector,
+}: {
+    step: Extract<AssistantEvent, { type: "research_step" }>;
+    showConnector?: boolean;
+}) {
+    const isRunning = step.status === "running";
+    const isFailed = step.status === "failed";
+    const isSkipped = step.status === "skipped";
+    const label = isRunning
+        ? RESEARCH_STEP_RUNNING_LABELS[step.key] ?? step.key
+        : RESEARCH_STEP_DONE_LABELS[step.key] ?? step.key;
+    const detail = researchStepDetail(step);
+    return (
+        <div className="flex items-start text-sm font-serif text-gray-500 relative">
+            {showConnector && (
+                <div className="absolute bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
+            )}
+            {isRunning ? (
+                <div className="mt-2 w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
+            ) : isFailed ? (
+                <div className="mt-2 w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+            ) : isSkipped ? (
+                <div className="mt-2 w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0" />
+            ) : (
+                <div className="mt-2 w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+            )}
+            <div className="ml-2 min-w-0 flex-1">
+                <span className="font-medium">{label}</span>
+                {isRunning && "..."}
+                {detail && <span className="text-gray-400"> · {detail}</span>}
+            </div>
+        </div>
+    );
+}
+
 function ReferenceBlock({
     sourceKind,
     title,
     url,
-    snippet,
     sourceLabel,
     date,
-    showConnector,
+    index,
+    drawParentLine,
 }: {
     sourceKind: "legal" | "web";
     title: string;
@@ -480,7 +545,15 @@ function ReferenceBlock({
     snippet: string;
     sourceLabel: string;
     date?: string;
-    showConnector?: boolean;
+    /** 1-based number rendered as the bullet. */
+    index: number;
+    /**
+     * When true, draw a vertical line at the parent step's x-position so
+     * the references chain visually into one continuous line from "Ranked
+     * results" above to the next step row below. Set false for the very
+     * last reference if no further step rows follow.
+     */
+    drawParentLine?: boolean;
 }) {
     const dateStr = date
         ? new Date(date).toLocaleDateString("en-US", {
@@ -490,45 +563,31 @@ function ReferenceBlock({
           })
         : null;
     const meta = [sourceLabel, dateStr].filter(Boolean).join(" · ");
-    const card = (
-        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 hover:border-gray-300 hover:bg-gray-50 transition-colors">
-            <div className="flex items-baseline gap-2 mb-1">
-                <span
-                    className={`text-[10px] font-medium uppercase tracking-wide shrink-0 ${
-                        sourceKind === "legal" ? "text-blue-600" : "text-gray-500"
-                    }`}
-                >
-                    {sourceKind === "legal" ? "Legal" : "Web"}
-                </span>
-                <span className="text-xs text-gray-500 truncate">{meta}</span>
-            </div>
-            <div className="text-sm font-medium text-gray-900 mb-1 line-clamp-2">
-                {title || "(untitled)"}
-            </div>
-            {snippet && (
-                <div className="text-xs text-gray-600 line-clamp-2">{snippet}</div>
-            )}
-        </div>
-    );
+    const labelText = title || url || "(untitled)";
+    const verb = sourceKind === "legal" ? "Cited" : "Read";
     return (
-        <div className="flex items-start text-sm relative my-1">
-            {showConnector && (
-                <div className="absolute bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
+        <div className="flex items-start text-sm font-serif text-gray-500 relative ml-5">
+            {drawParentLine && (
+                <div className="absolute -left-[17.5px] top-0 w-[1px] bg-gray-300 h-[calc(100%+11px)]" />
             )}
-            <div className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
-            <div className="ml-2 min-w-0 flex-1">
+            <span className="mt-[1px] w-4 shrink-0 tabular-nums text-right text-gray-400 text-xs leading-5">
+                {index}.
+            </span>
+            <div className="ml-2 min-w-0 flex-1 whitespace-normal break-words">
+                <span className="font-medium">{verb}</span>{" "}
                 {url ? (
                     <a
                         href={url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="block no-underline"
+                        className="text-left hover:text-gray-700 transition-colors cursor-pointer underline decoration-dotted underline-offset-2"
                     >
-                        {card}
+                        {labelText}
                     </a>
                 ) : (
-                    card
+                    <span>{labelText}</span>
                 )}
+                {meta && <span className="text-gray-400"> · {meta}</span>}
             </div>
         </div>
     );
@@ -1234,21 +1293,18 @@ export function AssistantMessage({
     // between wrappers, so reasoning/tool chatter that arrives after the
     // model has already streamed some prose gets its own wrapper.
     //
-    // Exception: reference_added events are first-class — they ARE the
-    // answer when Olava under-synthesises (which it does on multi-source
-    // research queries). They break out of the pre-wrapper just like
-    // content does, so cards stay visible without the user expanding
-    // a "Completed in N steps" disclosure.
+    // research_step and reference_added events live INSIDE the wrapper
+    // alongside other tool chatter — same compact step-row look, and the
+    // wrapper auto-collapses to "Completed in N steps" once the synthesis
+    // content streams. Earlier (bug-003) reference_added was promoted out
+    // of the wrapper to compensate for empty single-pass synthesis, but
+    // feat-005 means refs only fire in research mode where synthesis is
+    // reliably non-empty, so back inside they go.
     type EventGroup =
         | { kind: "pre"; events: AssistantEvent[]; indices: number[] }
         | {
               kind: "content";
               event: Extract<AssistantEvent, { type: "content" }>;
-              index: number;
-          }
-        | {
-              kind: "reference";
-              event: Extract<AssistantEvent, { type: "reference_added" }>;
               index: number;
           };
 
@@ -1257,17 +1313,17 @@ export function AssistantMessage({
         let current: Extract<EventGroup, { kind: "pre" }> | null = null;
         events.forEach((e, i) => {
             if (e.type === "content") {
+                // Empty / whitespace-only content events shouldn't split
+                // wrappers. Olava sometimes emits a "\n\n" delta between
+                // reasoning blocks; without this guard the visual breaks
+                // into two "Completed in N steps" cards even though
+                // nothing visible separates them.
+                if (!e.text || e.text.trim() === "") return;
                 if (current) {
                     groups.push(current);
                     current = null;
                 }
                 groups.push({ kind: "content", event: e, index: i });
-            } else if (e.type === "reference_added") {
-                if (current) {
-                    groups.push(current);
-                    current = null;
-                }
-                groups.push({ kind: "reference", event: e, index: i });
             } else {
                 if (!current)
                     current = { kind: "pre", events: [], indices: [] };
@@ -1368,6 +1424,17 @@ export function AssistantMessage({
             );
         }
         if (event.type === "reference_added") {
+            // 1-based index among consecutive reference_added events in the
+            // same group (so a fresh search batch resets numbering).
+            let refIdx = 1;
+            for (let j = i - 1; j >= 0; j--) {
+                if (allEvents[j].type !== "reference_added") break;
+                refIdx += 1;
+            }
+            // Continue the parent's vertical line through this reference
+            // unless this is the last event in the group (nothing below to
+            // chain to).
+            const drawParentLine = i < allEvents.length - 1;
             return (
                 <ReferenceBlock
                     key={globalIdx}
@@ -1377,6 +1444,16 @@ export function AssistantMessage({
                     snippet={event.snippet}
                     sourceLabel={event.source_label}
                     date={event.date}
+                    index={refIdx}
+                    drawParentLine={drawParentLine}
+                />
+            );
+        }
+        if (event.type === "research_step") {
+            return (
+                <ResearchStepBlock
+                    key={globalIdx}
+                    step={event}
                     showConnector={showConnector}
                 />
             );
@@ -1469,19 +1546,6 @@ export function AssistantMessage({
                                             }
                                         />
                                     </div>
-                                );
-                            }
-                            if (g.kind === "reference") {
-                                return (
-                                    <ReferenceBlock
-                                        key={`r-${g.index}`}
-                                        sourceKind={g.event.source_kind}
-                                        title={g.event.title}
-                                        url={g.event.url}
-                                        snippet={g.event.snippet}
-                                        sourceLabel={g.event.source_label}
-                                        date={g.event.date}
-                                    />
                                 );
                             }
                             const subsequentContent = hasContentAfter(gIdx);

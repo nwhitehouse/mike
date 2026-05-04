@@ -445,19 +445,51 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     try {
         write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
 
-        const { fullText, events } = await runLLMStream({
-            apiMessages,
-            docStore,
-            docIndex,
-            userId,
-            db,
-            write,
-            workflowStore,
-            model,
-            apiKeys,
-            projectId: project_id ?? null,
-            sources,
-        });
+        // Auto-detect: when the user has any research source selected
+        // (legal sources picker non-empty OR globe-icon web toggle on),
+        // route to the multi-pass research orchestrator instead of the
+        // single-pass chat loop. Selecting a source = "user wants depth."
+        // The orchestrator runs ≤25 Olava calls in ≤45s and produces a
+        // richly-cited synthesis. See feat-005 plan in backlog.md.
+        const inResearchMode =
+            (sources?.legal?.length ?? 0) > 0 || sources?.web === true;
+
+        let fullText: string;
+        let events: unknown[];
+
+        if (inResearchMode) {
+            const { runResearchOrchestrator } = await import(
+                "../lib/research/orchestrator"
+            );
+            const { resolveModel, DEFAULT_MAIN_MODEL } = await import(
+                "../lib/llm/models"
+            );
+            const result = await runResearchOrchestrator({
+                model: resolveModel(model, DEFAULT_MAIN_MODEL),
+                question: lastUser?.content ?? "",
+                legalSources: sources?.legal ?? [],
+                webEnabled: sources?.web === true,
+                write,
+            });
+            fullText = result.fullText;
+            events = result.events;
+        } else {
+            const result = await runLLMStream({
+                apiMessages,
+                docStore,
+                docIndex,
+                userId,
+                db,
+                write,
+                workflowStore,
+                model,
+                apiKeys,
+                projectId: project_id ?? null,
+                sources,
+            });
+            fullText = result.fullText;
+            events = result.events;
+        }
 
         const annotations = extractAnnotations(fullText, docIndex, events);
         const { error: assistantInsertError } = await db

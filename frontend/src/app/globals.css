@@ -495,3 +495,12 @@
         box-shadow: 0 0 0 2px rgba(59, 130, 246, 0);
     }
 }
+
+
+/* Drift grid loader (3×3 ripple) — used by ResponseStatus while the model
+   is responding. Each cell ramps opacity in and out with its own delay,
+   producing a slow, organic breathing effect. Ported from work___ AI loaders. */
+@keyframes gridPulse {
+    0%, 100% { opacity: 0.18; }
+    50%      { opacity: 0.95; }
+}

@@ -145,6 +145,17 @@ export type AssistantEvent =
         date?: string;
     }
   | {
+        /**
+         * Multi-pass research orchestrator (feat-005) progress event.
+         * One per pass per status transition. Frontend renders these as a
+         * checklist at the top of the assistant message.
+         */
+        type: "research_step";
+        key: "expanding_queries" | "searching" | "ranking" | "extracting" | "synthesizing";
+        status: "running" | "done" | "failed" | "skipped";
+        meta?: Record<string, unknown>;
+    }
+  | {
         type: "doc_edited";
         filename: string;
         document_id: string;

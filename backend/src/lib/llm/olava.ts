@@ -410,15 +410,22 @@ export async function streamOlava(
                         callbacks.onContentDelta?.(visible);
                     }
                 }
-                // Reasoning is dropped from output but counted for diagnostics.
+                // Forward reasoning to the UI so the user can expand the
+                // Thought process disclosure to see Olava's chain-of-thought.
+                // The security commit's PII concern was about backend logs;
+                // the user's own UI is fine to surface. (Persisted as part
+                // of chat_messages — visible to anyone the chat is shared
+                // with, same scope as the response itself.)
                 if (typeof delta.reasoning === "string" && delta.reasoning) {
                     reasoningChars += delta.reasoning.length;
+                    callbacks.onReasoningDelta?.(delta.reasoning);
                 }
                 if (
                     typeof delta.reasoning_content === "string" &&
                     delta.reasoning_content
                 ) {
                     reasoningChars += delta.reasoning_content.length;
+                    callbacks.onReasoningDelta?.(delta.reasoning_content);
                 }
                 if (Array.isArray(delta.tool_calls)) {
                     for (const tc of delta.tool_calls) {
