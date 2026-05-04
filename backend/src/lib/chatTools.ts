@@ -21,6 +21,24 @@ import {
     type LlmMessage,
     type OpenAIToolSchema,
 } from "./llm";
+import { verifyCitation } from "./research/citationVerifier";
+
+// Olava sometimes formats inline citations as Unicode superscripts (¹, ²,
+// ¹², ²³) instead of [1], [2], [12], [23] — natural for legal-style prose.
+// Mirror of the frontend's table in AssistantMessage.tsx; backend needs
+// it to detect markers in the streaming text and fire the verifier.
+const SUPERSCRIPT_DIGIT_TO_INT: Record<string, string> = {
+    "⁰": "0",
+    "¹": "1",
+    "²": "2",
+    "³": "3",
+    "⁴": "4",
+    "⁵": "5",
+    "⁶": "6",
+    "⁷": "7",
+    "⁸": "8",
+    "⁹": "9",
+};
 
 const STANDARD_FONT_DATA_URL = (() => {
     try {
@@ -2657,16 +2675,193 @@ export async function runLLMStream(params: {
     // across batches to let subsequent edit_document calls overwrite the
     // turn's existing version instead of creating a new one.
     const turnEditState: TurnEditState = new Map();
+
+    // ─── Per-marker citation verifier (parallel) ────────────────────────────
+    // Olava is cheap; one Olava call per [N] marker is the right cost
+    // profile, and firing them as soon as each marker streams (rather than
+    // waiting for end-of-turn) means pills can render progressively while
+    // the prose is still arriving.
+    //
+    // v1 scope: only enabled when the chat has exactly one PDF in scope.
+    // Multi-doc disambiguation ("[N] from which doc?") is a follow-up.
+    const pdfsInScope = Array.from(docStore.entries()).filter(
+        ([, info]) => info.file_type === "pdf",
+    );
+    let verifierDocId: string | null = null;
+    let verifierDocText = "";
+    if (pdfsInScope.length === 1) {
+        const [docId, info] = pdfsInScope[0];
+        try {
+            const buf = await downloadFile(info.storage_path);
+            if (buf) {
+                verifierDocText = await extractPdfText(buf);
+                verifierDocId = docId;
+                console.log(
+                    `[verifier] pre-extracted ${verifierDocText.length} chars from ${info.filename}`,
+                );
+            }
+        } catch (err) {
+            console.warn("[verifier] pre-extract failed:", err);
+        }
+    }
+    const seenRefs = new Set<number>();
+    const verifierPromises: Promise<void>[] = [];
+
+    const fireVerifier = (marker: number) => {
+        if (!verifierDocId || seenRefs.has(marker)) return;
+        seenRefs.add(marker);
+        const proseSnapshot = iterText;
+        const docId = verifierDocId;
+        const docText = verifierDocText;
+        const p = (async () => {
+            const t0 = Date.now();
+            const result = await verifyCitation({
+                marker,
+                docId,
+                proseSoFar: proseSnapshot,
+                docText,
+            });
+            console.log(
+                `[verifier] marker=${marker} ${result ? "ok" : "miss"} in ${Date.now() - t0}ms`,
+            );
+            if (!result) return;
+            events.push({
+                type: "citation_added",
+                ref: result.ref,
+                doc_id: result.doc_id,
+                page: result.page,
+                quote: result.quote,
+            });
+            // Stream the citation live so the pill can render the moment
+            // its annotation lands, not at end-of-turn.
+            write(
+                `data: ${JSON.stringify({
+                    type: "citation_added",
+                    ref: result.ref,
+                    doc_id: result.doc_id,
+                    page: result.page,
+                    quote: result.quote,
+                })}\n\n`,
+            );
+        })();
+        verifierPromises.push(p);
+    };
+
+    const detectMarkersIn = (text: string): number[] => {
+        const out: number[] = [];
+        for (const m of text.matchAll(/\[(\d+)(?:,\s*\d+)*\]/g)) {
+            out.push(parseInt(m[1], 10));
+        }
+        for (const m of text.matchAll(/[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g)) {
+            let s = "";
+            for (const ch of m[0]) {
+                const d = SUPERSCRIPT_DIGIT_TO_INT[ch];
+                if (d) s += d;
+            }
+            const n = parseInt(s, 10);
+            if (Number.isFinite(n)) out.push(n);
+        }
+        return out;
+    };
+
     let fullText = "";
     let iterText = "";
     let iterVisibleText = "";
     let iterReasoning = "";
     let visibleTailBuffer = "";
     let citationsOpenSeen = false;
+    // Stream-parser for the hidden <CITATIONS> JSON block. Once the open
+    // tag arrives, we accumulate everything after it into this buffer and,
+    // every delta, scan for newly-completed top-level {...} entries. Each
+    // complete entry is parsed and emitted as a live citation_added event
+    // — pills can render progressively during JSON-tail generation rather
+    // than waiting for the batched citations event at end-of-turn.
+    let citationsJsonBuffer = "";
+    const liveCitationRefs = new Set<number>();
+
+    const tryEmitStreamedCitations = () => {
+        // Walk the buffer with a brace-depth counter. Any { ... } at
+        // depth 0 is a complete entry. Drop emitted entries from the
+        // buffer so the next pass doesn't re-scan them.
+        let depth = 0;
+        let start = -1;
+        let inString = false;
+        let escape = false;
+        let cutTo = 0;
+        for (let i = 0; i < citationsJsonBuffer.length; i++) {
+            const ch = citationsJsonBuffer[i];
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch === "\\" && inString) {
+                escape = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+            if (ch === "{") {
+                if (depth === 0) start = i;
+                depth++;
+            } else if (ch === "}") {
+                depth--;
+                if (depth === 0 && start >= 0) {
+                    const entryStr = citationsJsonBuffer.slice(start, i + 1);
+                    try {
+                        const parsed = JSON.parse(entryStr) as unknown;
+                        const norm = normalizeCitation(parsed);
+                        if (norm && !liveCitationRefs.has(norm.ref)) {
+                            liveCitationRefs.add(norm.ref);
+                            // Resolve doc_id back to a chat-local label so
+                            // the model's possibly-loose doc identifier
+                            // becomes something the frontend can match.
+                            const resolvedLabel =
+                                resolveDocLabel(norm.doc_id, docStore, docIndex) ??
+                                norm.doc_id;
+                            const cit = { ...norm, doc_id: resolvedLabel };
+                            events.push({
+                                type: "citation_added",
+                                ref: cit.ref,
+                                doc_id: cit.doc_id,
+                                page: cit.page,
+                                quote: cit.quote,
+                            });
+                            write(
+                                `data: ${JSON.stringify({
+                                    type: "citation_added",
+                                    ref: cit.ref,
+                                    doc_id: cit.doc_id,
+                                    page: cit.page,
+                                    quote: cit.quote,
+                                })}\n\n`,
+                            );
+                        }
+                    } catch {
+                        // entry not yet complete or malformed; skip
+                    }
+                    cutTo = i + 1;
+                    start = -1;
+                }
+            }
+        }
+        if (cutTo > 0) {
+            citationsJsonBuffer = citationsJsonBuffer.slice(cutTo);
+        }
+    };
 
     const streamVisibleContent = (delta: string) => {
         if (!delta) return;
-        if (citationsOpenSeen) return;
+        if (citationsOpenSeen) {
+            // Inside the <CITATIONS> JSON block: accumulate (don't emit
+            // to user-visible stream) and try to parse out completed
+            // entries to fire as live citation_added events.
+            citationsJsonBuffer += delta;
+            tryEmitStreamedCitations();
+            return;
+        }
 
         const combined = visibleTailBuffer + delta;
         const markerIdx = combined.indexOf(CITATIONS_OPEN_TAG);
@@ -2678,8 +2873,14 @@ export async function runLLMStream(params: {
                     `data: ${JSON.stringify({ type: "content_delta", text: visible })}\n\n`,
                 );
             }
+            // Anything after <CITATIONS> on this delta is the start of
+            // the JSON block — seed the parser so we don't lose the
+            // first entry's bytes that arrived in this same chunk.
+            const afterTag = combined.slice(markerIdx + CITATIONS_OPEN_TAG.length);
             visibleTailBuffer = "";
             citationsOpenSeen = true;
+            citationsJsonBuffer = afterTag;
+            tryEmitStreamedCitations();
             return;
         }
 
@@ -2717,6 +2918,9 @@ export async function runLLMStream(params: {
         iterVisibleText = "";
         visibleTailBuffer = "";
         citationsOpenSeen = false;
+        // Reset the per-iter <CITATIONS> stream-parser buffer. liveCitationRefs
+        // stays turn-wide so we don't double-emit the same ref across iters.
+        citationsJsonBuffer = "";
     };
 
     const selectedModel = resolveModel(model, DEFAULT_MAIN_MODEL);
@@ -2733,6 +2937,12 @@ export async function runLLMStream(params: {
             onContentDelta: (delta) => {
                 iterText += delta;
                 streamVisibleContent(delta);
+                // Per-marker verifier fan-out. fireVerifier dedupes via
+                // seenRefs so re-scanning the whole iterText each delta
+                // is fine — every marker gets exactly one verifier call.
+                for (const ref of detectMarkersIn(iterText)) {
+                    fireVerifier(ref);
+                }
             },
             onReasoningDelta: (delta) => {
                 iterReasoning += delta;
@@ -2894,6 +3104,19 @@ export async function runLLMStream(params: {
     });
 
     flushText();
+
+    // Wait for any in-flight per-marker verifiers to finish before we
+    // build the final batched citations payload. Each verifier already
+    // streamed its own citation_added SSE event, so the user has been
+    // seeing pills appear progressively — this just makes sure the
+    // batched event at end-of-turn matches the persisted annotations.
+    if (verifierPromises.length) {
+        const t0 = Date.now();
+        await Promise.all(verifierPromises);
+        console.log(
+            `[verifier] awaited ${verifierPromises.length} in-flight call(s) in ${Date.now() - t0}ms`,
+        );
+    }
 
     // Build the citations payload. Prefer tool-emitted citations (model
     // called `add_citation` per [N] marker — reliable), fall back to the

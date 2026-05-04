@@ -920,13 +920,37 @@ function DocEditedBlock({
 // Citation preprocessing
 // ---------------------------------------------------------------------------
 
+// Olava sometimes writes citation markers as Unicode superscripts
+// (¹, ², ¹², ²³) instead of [1], [2], [12], [23] — natural for legal-style
+// prose but invisible to the [N] regex. Detect both forms.
+const SUPERSCRIPT_DIGIT_TO_INT: Record<string, string> = {
+    "⁰": "0",
+    "¹": "1",
+    "²": "2",
+    "³": "3",
+    "⁴": "4",
+    "⁵": "5",
+    "⁶": "6",
+    "⁷": "7",
+    "⁸": "8",
+    "⁹": "9",
+};
+const SUPERSCRIPT_RUN_RE =
+    /[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g;
+
+function superscriptRunToInt(run: string): number {
+    let s = "";
+    for (const ch of run) s += SUPERSCRIPT_DIGIT_TO_INT[ch] ?? "";
+    return parseInt(s, 10);
+}
+
 function preprocessCitations(
     text: string,
     annotations: MikeCitationAnnotation[],
     citationsList: MikeCitationAnnotation[],
 ): string {
     // Replace [N] or [N, M, ...] inline markers with internal §idx§ tokens backed by annotations
-    return text.replace(/\[(\d+(?:,\s*\d+)*)\]/g, (full, refsStr) => {
+    let out = text.replace(/\[(\d+(?:,\s*\d+)*)\]/g, (full, refsStr) => {
         const refs = (refsStr as string)
             .split(",")
             .map((s: string) => parseInt(s.trim(), 10));
@@ -939,6 +963,19 @@ function preprocessCitations(
         });
         return tokens.length > 0 ? tokens.join("") : full;
     });
+    // Also match contiguous runs of Unicode superscript digits — one run =
+    // one ref. Adjacent refs are typically separated by punctuation in
+    // prose so we don't try to split a single run further.
+    out = out.replace(SUPERSCRIPT_RUN_RE, (run) => {
+        const ref = superscriptRunToInt(run);
+        if (!Number.isFinite(ref)) return run;
+        const ann = annotations.find((a) => a.ref === ref);
+        if (!ann) return run;
+        const idx = citationsList.length;
+        citationsList.push(ann);
+        return `\`§${idx}§\`\u200B`;
+    });
+    return out;
 }
 
 // ---------------------------------------------------------------------------

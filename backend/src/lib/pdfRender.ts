@@ -1,5 +1,9 @@
 import path from "path";
-import { createCanvas, type SKRSContext2D, type Canvas } from "@napi-rs/canvas";
+import {
+    createCanvas,
+    type CanvasRenderingContext2D,
+    type Canvas,
+} from "canvas";
 
 const STANDARD_FONT_DATA_URL = (() => {
     try {
@@ -12,16 +16,17 @@ const STANDARD_FONT_DATA_URL = (() => {
 
 type CanvasAndContext = {
     canvas: Canvas | null;
-    context: SKRSContext2D | null;
+    context: CanvasRenderingContext2D | null;
 };
 
 // pdfjs in Node needs a CanvasFactory implementation it can call into to
-// allocate raster surfaces during page.render(). Mirrors the upstream
-// example NodeCanvasFactory pattern.
+// allocate raster surfaces during page.render(). Uses node-canvas — the
+// faster `@napi-rs/canvas` rejects pdfjs's internal Path2D objects in
+// ctx.fill(), which breaks glyph rendering on the very first page.
 class NodeCanvasFactory {
     create(width: number, height: number): CanvasAndContext {
         const canvas = createCanvas(width, height);
-        const context = canvas.getContext("2d") as unknown as SKRSContext2D;
+        const context = canvas.getContext("2d");
         return { canvas, context };
     }
     reset(c: CanvasAndContext, width: number, height: number) {

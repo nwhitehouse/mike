@@ -51,6 +51,44 @@ export function useAssistantChat({
     const dripDisplayLenRef = useRef<number>(0);
     const eventsRef = useRef<AssistantEvent[]>([]);
     const DRIP_CHARS_PER_TICK = 8;
+    // Buffered annotations from live citation_added SSE events. Coalesced
+    // through a rAF flush so a burst of 30+ events (when the model writes
+    // the <CITATIONS> JSON block in a tight loop) yields one setMessages
+    // per frame, not one per event.
+    const pendingCitationsRef = useRef<MikeCitationAnnotation[]>([]);
+    const citationsFlushRafRef = useRef<number | null>(null);
+
+    const flushPendingCitations = () => {
+        citationsFlushRafRef.current = null;
+        const pending = pendingCitationsRef.current;
+        if (pending.length === 0) return;
+        pendingCitationsRef.current = [];
+        setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role !== "assistant") return prev;
+            const existing = last.annotations ?? [];
+            const seen = new Set(existing.map((a) => a.ref));
+            const fresh = pending.filter((a) => {
+                if (seen.has(a.ref)) return false;
+                seen.add(a.ref);
+                return true;
+            });
+            if (fresh.length === 0) return prev;
+            updated[updated.length - 1] = {
+                ...last,
+                annotations: [...existing, ...fresh],
+            };
+            return updated;
+        });
+    };
+
+    const scheduleCitationsFlush = () => {
+        if (citationsFlushRafRef.current !== null) return;
+        citationsFlushRafRef.current = requestAnimationFrame(
+            flushPendingCitations,
+        );
+    };
 
     const stopDrip = () => {
         if (dripIntervalRef.current !== null) {
@@ -834,10 +872,36 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "citation_added") {
+                            // Live per-marker verifier result. Buffer in a ref
+                            // and flush at most once per animation frame so a
+                            // burst of 30+ events (which arrive together when
+                            // the model writes the <CITATIONS> JSON tail in a
+                            // tight loop) doesn't trigger 30 separate React
+                            // commits — that compounds with downstream effects
+                            // and trips React's max-update-depth heuristic.
+                            const incoming = {
+                                type: "citation_data",
+                                ref: data.ref as number,
+                                doc_id: data.doc_id as string,
+                                document_id: "",
+                                filename: data.doc_id as string,
+                                page: data.page as number | string,
+                                quote: data.quote as string,
+                            } as unknown as MikeCitationAnnotation;
+                            pendingCitationsRef.current.push(incoming);
+                            scheduleCitationsFlush();
+                            continue;
+                        }
+
                         if (data.type === "citations") {
                             // End-of-stream signal — scrub any lingering
                             // placeholders so they don't persist into the
-                            // finalised message.
+                            // finalised message. Replaces the live-streamed
+                            // annotations with the authoritative end-of-turn
+                            // payload (which carries enriched fields like
+                            // document_id and version_id that the live
+                            // citation_added events don't).
                             clearStreamingPlaceholders();
                             const incoming = (data.citations ??
                                 []) as MikeCitationAnnotation[];
@@ -866,6 +930,13 @@ export function useAssistantChat({
 
             flushDrip();
             finalizeStreamingReasoning();
+            // Drain any citation_added events that arrived right before
+            // [DONE] but didn't get flushed by their rAF tick yet.
+            if (citationsFlushRafRef.current !== null) {
+                cancelAnimationFrame(citationsFlushRafRef.current);
+                citationsFlushRafRef.current = null;
+            }
+            flushPendingCitations();
             setIsResponseLoading(false);
             setIsLoadingCitations(false);
 
