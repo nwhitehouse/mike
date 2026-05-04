@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import { ChatInput } from "./ChatInput";
 import { SelectAssistantProjectModal } from "./SelectAssistantProjectModal";
-import { getRandomGreeting } from "@/lib/greetings";
+import { pickGreetingIndex, renderGreeting } from "@/lib/greetings";
 import type { MikeMessage } from "../shared/types";
 
 interface InitialViewProps {
@@ -26,9 +26,11 @@ export function InitialView({ onSubmit }: InitialViewProps) {
 
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
-    // Fix the greeting to a single random pick for the lifetime of this mount
-    // so it doesn't shuffle on every re-render while the user is reading it.
-    const [greeting] = useState(() => getRandomGreeting(username));
+    // Pick the template once at mount (so it doesn't shuffle on re-render),
+    // but substitute the name at render-time so the greeting picks up
+    // `displayName` as soon as the profile finishes loading.
+    const [greetingIndex] = useState(() => pickGreetingIndex());
+    const greeting = renderGreeting(greetingIndex, username);
 
     useLayoutEffect(() => {
         if (!profile || !textRef.current) return;

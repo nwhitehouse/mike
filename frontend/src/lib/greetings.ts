@@ -33,3 +33,16 @@ export function getRandomGreeting(name: string): string {
     const template = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
     return template.replace(/\{name\}/g, safeName);
 }
+
+/** Pick a template index once; substitute the name at render-time so the
+ *  greeting picks up `displayName` as soon as the profile finishes loading
+ *  (instead of being baked in with the email-split fallback at mount). */
+export function pickGreetingIndex(): number {
+    return Math.floor(Math.random() * GREETINGS.length);
+}
+
+export function renderGreeting(index: number, name: string): string {
+    const safeName = name.trim() || "there";
+    const template = GREETINGS[Math.abs(index) % GREETINGS.length];
+    return template.replace(/\{name\}/g, safeName);
+}
