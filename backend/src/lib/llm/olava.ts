@@ -2,11 +2,17 @@ import type {
     StreamChatParams,
     StreamChatResult,
     NormalizedToolCall,
+    LlmContentBlock,
 } from "./types";
 
 type OlavaMessage = {
     role: "system" | "user" | "assistant" | "tool";
-    content: string | null;
+    /**
+     * Plain string for text-only turns. Array of OpenAI-style content blocks
+     * for multimodal turns (vision). vLLM's OpenAI-compat endpoint accepts
+     * the array directly when serving a VL model — pass-through.
+     */
+    content: string | LlmContentBlock[] | null;
     tool_calls?: Array<{
         id: string;
         type: "function";

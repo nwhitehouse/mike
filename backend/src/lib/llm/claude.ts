@@ -28,7 +28,19 @@ function client(override?: string | null): Anthropic {
 function toNativeMessages(
     messages: StreamChatParams["messages"],
 ): NativeMessage[] {
-    return messages.map((m) => ({ role: m.role, content: m.content }));
+    return messages.map((m) => {
+        // Multimodal content (vision) is currently Olava-only — caller
+        // shouldn't be routing vision turns to Claude. If it does, flatten
+        // text blocks and drop images so the request still goes through.
+        if (typeof m.content === "string") {
+            return { role: m.role, content: m.content };
+        }
+        const text = m.content
+            .filter((b) => b.type === "text")
+            .map((b) => (b as { text: string }).text)
+            .join("\n");
+        return { role: m.role, content: text };
+    });
 }
 
 export async function streamClaude(

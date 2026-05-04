@@ -2614,10 +2614,16 @@ export async function runLLMStream(params: {
     ];
 
     // Extract system prompt; pass remaining turns to the adapter as
-    // plain user/assistant messages.
-    const rawMsgs = apiMessages as { role: string; content: string | null }[];
+    // plain user/assistant messages. User messages may carry multimodal
+    // content (string OR an array of {type:"text"|"image_url"} blocks)
+    // when vision-mode auto-on attached PDF page images upstream.
+    const rawMsgs = apiMessages as {
+        role: string;
+        content: string | LlmMessage["content"] | null;
+    }[];
+    const sysContent = rawMsgs[0]?.role === "system" ? rawMsgs[0].content : "";
     const baseSystemPrompt =
-        rawMsgs[0]?.role === "system" ? (rawMsgs[0].content ?? "") : "";
+        typeof sysContent === "string" ? sysContent : "";
     const legalSourceHint = selectedLegalSources.length
         ? `\n\nLegal research sources selected by the user: ${selectedLegalSources.join(", ")}. ` +
           "When using the legal_search tool, set the `sources` argument to a subset of this list. " +
@@ -2627,13 +2633,22 @@ export async function runLLMStream(params: {
         ? "\n\nWeb search is enabled — use `web_search` for current events, news, blog posts, " +
           "and commentary not covered by uploaded documents or legal databases."
         : "";
-    const systemPrompt = baseSystemPrompt + legalSourceHint + webHint;
     const chatMessages: LlmMessage[] = rawMsgs
         .filter((m) => m.role !== "system")
         .map((m) => ({
             role: m.role === "assistant" ? "assistant" : "user",
             content: m.content ?? "",
         }));
+    // If the upstream attached PDF page images to the last user message,
+    // tell the model so it reads from the images instead of waiting for a
+    // read_document tool result. Detected here (rather than passed in as
+    // a flag) so the hint stays in lock-step with the actual payload.
+    const hasVisionContent = chatMessages.some((m) => Array.isArray(m.content));
+    const visionHint = hasVisionContent
+        ? "\n\nVISION MODE: The user's attached PDFs are provided to you as page images in the user message above. Read directly from those images — they preserve tables, charts, signatures, and visual layout that text extraction would lose. You do NOT need to call read_document for these PDFs unless you specifically want a plain-text extraction for some reason."
+        : "";
+    const systemPrompt =
+        baseSystemPrompt + legalSourceHint + webHint + visionHint;
 
     const events: AssistantEvent[] = [];
     // One assistant turn produces at most one document_versions row per

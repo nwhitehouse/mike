@@ -10,6 +10,7 @@ import {
     runLLMStream,
     type ChatMessage,
 } from "../lib/chatTools";
+import { attachPdfImagesToLastUserMessage } from "../lib/visionContext";
 import { completeText } from "../lib/llm";
 import { getUserApiKeys, getUserModelSettings } from "../lib/userSettings";
 import {
@@ -428,7 +429,21 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         db,
         docIndex,
     );
-    const apiMessages = buildMessages(enrichedMessages, docAvailability);
+    let apiMessages = buildMessages(enrichedMessages, docAvailability) as {
+        role: string;
+        content: string | null;
+    }[];
+
+    // Vision-mode auto-on: when the chat has any attached PDF, render every
+    // page to PNG and splice them into the last user message as image_url
+    // content blocks. The model (Olava-001 served from a Qwen3-VL base via
+    // vLLM with --limit-mm-per-prompt image=30) reasons over the document
+    // visually rather than text-extraction-then-prompt. Caps at 30 pages
+    // total per request to fit vLLM's per-prompt image limit.
+    apiMessages = (await attachPdfImagesToLastUserMessage(
+        apiMessages,
+        docStore,
+    )) as typeof apiMessages;
 
     const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 

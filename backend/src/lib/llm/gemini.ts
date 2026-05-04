@@ -34,10 +34,23 @@ function client(override?: string | null): GoogleGenAI {
 }
 
 function toNativeContents(messages: StreamChatParams["messages"]): GeminiContent[] {
-    return messages.map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-    }));
+    return messages.map((m) => {
+        // Multimodal content (vision) is currently Olava-only; if a vision
+        // payload reaches the Gemini adapter, flatten the text blocks and
+        // drop images. Caller shouldn't be routing vision turns to Gemini
+        // until we wire image parts here.
+        const text =
+            typeof m.content === "string"
+                ? m.content
+                : m.content
+                      .filter((b) => b.type === "text")
+                      .map((b) => (b as { text: string }).text)
+                      .join("\n");
+        return {
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text }],
+        };
+    });
 }
 
 export async function streamGemini(

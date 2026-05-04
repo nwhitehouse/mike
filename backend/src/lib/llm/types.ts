@@ -13,9 +13,22 @@ export type OpenAIToolSchema = {
     };
 };
 
+export type LlmTextBlock = { type: "text"; text: string };
+export type LlmImageBlock = {
+    type: "image_url";
+    image_url: { url: string; detail?: "low" | "high" | "auto" };
+};
+export type LlmContentBlock = LlmTextBlock | LlmImageBlock;
+
 export type LlmMessage = {
     role: "user" | "assistant";
-    content: string;
+    /**
+     * Plain string for text-only turns (the common case). Array of content
+     * blocks for vision turns where the user message includes images
+     * (OpenAI Chat Completions multimodal format). Provider adapters pass
+     * the array through to the wire — vLLM serves Qwen3-VL natively.
+     */
+    content: string | LlmContentBlock[];
 };
 
 export type NormalizedToolCall = {
