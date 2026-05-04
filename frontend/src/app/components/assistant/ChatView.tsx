@@ -96,10 +96,14 @@ export function ChatView({
     /**
      * One tab per document. If a tab for `tab.documentId` already exists,
      * the panel stays mounted and only the header-relevant fields swap
-     * (kind, citation/edit, version, filename). Per-tab UI state — the
-     * dismissable warning and the saved scroll position — is preserved
-     * so switching headers doesn't blow away viewer state. If no tab
-     * exists for the document, a new one is appended.
+     * (kind, citation/edit, version, filename). The dismissable warning
+     * is preserved across upserts. The saved scroll position is preserved
+     * ONLY when the new mode has no specific scroll target (kind="document"
+     * — e.g. user clicked Open on a download card and we want to land them
+     * where they last were). For citation/edit modes the new mode has its
+     * own target — preserving the prior scroll would race with the viewer's
+     * scroll-to-highlight and visibly leave the viewer on the previous
+     * citation. If no tab exists for the document, a new one is appended.
      */
     const upsertTab = useCallback(
         (tab: AssistantSidePanelTab) => {
@@ -109,12 +113,16 @@ export function ChatView({
                 );
                 if (idx >= 0) {
                     const existing = prev[idx];
+                    const newHasOwnTarget =
+                        tab.kind === "citation" || tab.kind === "edit";
                     const copy = prev.slice();
                     copy[idx] = {
                         ...tab,
                         id: existing.id,
                         warning: existing.warning,
-                        initialScrollTop: existing.initialScrollTop,
+                        initialScrollTop: newHasOwnTarget
+                            ? null
+                            : existing.initialScrollTop,
                     };
                     return copy;
                 }

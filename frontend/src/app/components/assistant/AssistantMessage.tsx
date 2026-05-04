@@ -942,6 +942,88 @@ function preprocessCitations(
 }
 
 // ---------------------------------------------------------------------------
+// Citation pill (with hover preview)
+// ---------------------------------------------------------------------------
+
+function CitationPill({
+    annotation,
+    idx,
+    onClick,
+}: {
+    annotation: MikeCitationAnnotation;
+    idx: number;
+    onClick?: (a: MikeCitationAnnotation) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const cancelTimers = () => {
+        if (enterTimer.current) {
+            clearTimeout(enterTimer.current);
+            enterTimer.current = null;
+        }
+        if (leaveTimer.current) {
+            clearTimeout(leaveTimer.current);
+            leaveTimer.current = null;
+        }
+    };
+
+    const handleEnter = () => {
+        cancelTimers();
+        enterTimer.current = setTimeout(() => setOpen(true), 120);
+    };
+
+    const handleLeave = () => {
+        cancelTimers();
+        leaveTimer.current = setTimeout(() => setOpen(false), 100);
+    };
+
+    useEffect(() => () => cancelTimers(), []);
+
+    const filename = annotation.filename || annotation.doc_id;
+    const pageLabel = formatCitationPage(annotation);
+    const quote = displayCitationQuote(annotation);
+
+    return (
+        <span
+            className="relative inline-block align-super"
+            onMouseEnter={handleEnter}
+            onMouseLeave={handleLeave}
+        >
+            <button
+                type="button"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onClick?.(annotation);
+                }}
+                className="mx-0.5 inline-flex items-center justify-center rounded-full w-4 h-4 text-[10px] font-medium transition-colors bg-gray-100 text-gray-900 hover:bg-gray-200"
+                aria-label={`Citation ${idx + 1}: ${filename}, ${pageLabel}`}
+            >
+                {idx + 1}
+            </button>
+            {open && (
+                <span
+                    role="tooltip"
+                    className="absolute z-50 left-1/2 bottom-full mb-2 -translate-x-1/2 w-72 rounded-md border border-gray-200 bg-white shadow-lg p-3 text-left align-top normal-case font-normal"
+                    style={{ pointerEvents: "auto" }}
+                >
+                    <span className="block text-[11px] font-semibold text-gray-900 truncate">
+                        {filename}
+                    </span>
+                    <span className="block text-[10px] text-gray-500 mt-0.5">
+                        {pageLabel}
+                    </span>
+                    <span className="block mt-2 text-xs text-gray-700 leading-snug font-serif italic line-clamp-6">
+                        “{quote}”
+                    </span>
+                </span>
+            )}
+        </span>
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Markdown renderer (shared config)
 // ---------------------------------------------------------------------------
 
@@ -1063,21 +1145,12 @@ function MarkdownContent({
                             const idx = parseInt(citMatch[1]);
                             const annotation = citationsList[idx];
                             if (annotation) {
-                                const tooltipText = `${formatCitationPage(annotation)}: "${displayCitationQuote(annotation)}"`;
                                 return (
-                                    <button
-                                        onClick={() => {
-                                            console.log(
-                                                "[AssistantMessage] citation clicked",
-                                                annotation,
-                                            );
-                                            onCitationClick?.(annotation);
-                                        }}
-                                        className="mx-0.5 inline-flex items-center justify-center rounded-full w-4 h-4 text-[10px] font-medium transition-colors align-super bg-gray-100 text-gray-900 hover:bg-gray-200"
-                                        title={tooltipText}
-                                    >
-                                        {idx + 1}
-                                    </button>
+                                    <CitationPill
+                                        annotation={annotation}
+                                        idx={idx}
+                                        onClick={onCitationClick}
+                                    />
                                 );
                             }
                         }

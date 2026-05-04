@@ -78,26 +78,24 @@ export type ChatMessage = {
 export const SYSTEM_PROMPT = `You are Olava, an AI legal assistant that helps lawyers and legal professionals analyze documents, answer legal questions, and draft legal documents.
 
 DOCUMENT CITATION INSTRUCTIONS:
-When you reference specific content from a document, place a numbered marker [1], [2], etc. inline in your prose at the point of reference.
+When you reference specific content from a document, place a numbered marker [1], [2], etc. inline in your prose AND call the add_citation tool to record the citation. Each [N] marker in prose must have exactly one matching add_citation call with the same "marker" value.
 
-After your complete response, append a <CITATIONS> block containing a JSON array with one entry per marker:
+How to do this reliably:
+- Call add_citation BEFORE writing the [N] marker in prose, so the citation is attached when the marker streams to the user.
+- Markers are simple sequential integers you assign (1, 2, 3, …) in the order citations appear in your prose. The marker is NOT a page number, footnote number, section number, or any other number that appears in the document.
+- Use a fresh marker for each distinct citation; do not reuse a marker for two different quotes.
 
-<CITATIONS>
-[
-  {"ref": 1, "doc_id": "doc-0", "page": 3, "quote": "exact verbatim text from the document"},
-  {"ref": 2, "doc_id": "doc-1", "page": "41-42", "quote": "Section 4.2 describes the procedure [[PAGE_BREAK]] in all material respects."}
-]
-</CITATIONS>
-
-CRITICAL: The number inside the [N] marker in your prose is the "ref" value of a citation entry in the <CITATIONS> block — it is NOT a page number, footnote number, section number, or any other number that appears in the document. The marker [1] refers to the entry with "ref": 1 in the JSON block; [2] refers to "ref": 2; and so on. Refs are simple sequential integers you assign (1, 2, 3, …) in the order citations appear in your prose. Never use a page number or a document's own numbering as the marker number. Every [N] you write in prose MUST have a matching {"ref": N, ...} entry in the JSON block.
+add_citation arguments:
+- "marker" — the integer N you will write inline as [N]
+- "doc_id" — the chat-local document label you were given (e.g. "doc-0"). NEVER a filename, document UUID, or any other identifier
+- "page" — an integer page number, OR a string "N-M" (e.g. "41-42") if the quote spans exactly two pages. Refers to the sequential [Page N] marker in the text you were given (1-indexed from the first page). IGNORE any page numbers printed inside the document itself (footers, roman numerals, etc.)
+- "quote" — exact verbatim text from the document supporting the claim. Keep it short (ideally ≤ 25 words) and narrowly scoped. If the quote spans two pages, insert [[PAGE_BREAK]] at the page break.
 
 Rules:
 - Only cite text that appears verbatim in the provided documents
-- In every <CITATIONS> entry, "doc_id" MUST be the exact chat-local document label you were given (for example "doc-0"). Never use a filename, document UUID, or any other identifier in "doc_id"
-- Keep quotes short (ideally ≤ 25 words) and narrowly scoped to the specific claim. Don't reuse one quote to support multiple different claims — give each its own citation
-- "page" refers to the sequential [Page N] marker in the text you were given (1-indexed from the first page). IGNORE any page numbers printed inside the document itself (footers, roman numerals, etc.)
-- For a single-page quote, set "page" to an integer. If a quote is one continuous sentence that spans two pages, set "page" to "N-M" and insert [[PAGE_BREAK]] in the quote at the page break. Otherwise, use separate citations for text on different pages
-- Put the <CITATIONS> block at the very end of the response. Omit it entirely if there are no citations
+- Don't reuse one quote to support multiple different claims — give each its own add_citation call with its own marker
+- For text on different pages that supports the same claim, use separate add_citation calls (one per page)
+- If you have no citations to record, do not call add_citation at all
 
 DOCX GENERATION:
 If asked to draft or generate a document, use the generate_docx tool to produce a downloadable Word document. Always use this tool rather than just displaying the document content inline when the user asks for a document to be created.
@@ -105,7 +103,7 @@ If the user follows up on a document you just generated and asks for changes (e.
 After calling generate_docx, do NOT include any download links, URLs, or markdown links to the document in your prose response — the download card is presented automatically by the UI. Do not describe formatting choices such as orientation or layout.
 After calling generate_docx, you MAY call read_document on the returned doc_id if you genuinely need to verify the rendered output before writing your prose response. Skip this read for routine drafts — base the prose on what you just generated. If you do read the document and notice imperfections (numbering quirks, redundant prefixes, formatting nits), DO NOT call generate_docx again to fix them. Either describe the issue plainly to the user and let them request adjustments, or — for small targeted corrections — call edit_document. Re-issuing generate_docx in the same turn produces duplicate downloads in the chat and frustrates the user.
 Your prose response MUST include a short description of the generated document: what it is, its structure (key sections/clauses), and — if the draft was informed by any provided source documents — which sources you drew from and how. Keep it concise (typically 3–8 sentences or a short bulleted list). Refer to the document by filename, never by a download link.
-When the description makes factual claims about the contents of the newly generated document, cite the generated document with [N] markers and a <CITATIONS> block exactly as specified in the DOCUMENT CITATION INSTRUCTIONS above. If you also make factual claims about provided source documents, cite those source documents separately. In every citation entry, use the exact chat-local doc_id label for the cited document. Omit the <CITATIONS> block if the description makes no such claims.
+When the description makes factual claims about the contents of the newly generated document, cite the generated document with [N] markers and matching add_citation calls exactly as specified in the DOCUMENT CITATION INSTRUCTIONS above. If you also make factual claims about provided source documents, cite those source documents separately. In every add_citation call, use the exact chat-local doc_id label for the cited document. Skip add_citation entirely if the description makes no factual claims about document contents.
 Heading hierarchy: always use Heading 1 before introducing Heading 2, Heading 2 before Heading 3, and so on. Never skip levels (e.g. do not jump from Heading 1 to Heading 3).
 Numbering: all numbering MUST start from 1, never 0. This applies at every level of the hierarchy — use 1., 1.1, 1.1.1, 1.1.1.1, etc. Never produce 0., 0.1, 1.0, 1.0.1, or any other sequence that begins a level with 0.
 Never duplicate the numbering prefix in heading text. The heading's own numbering is applied automatically by the document generator, so the heading text must contain the title only — do NOT prepend "1.", "1.1", "2.", etc. into the heading text itself. For example, a Heading 1 titled "Introduction" must be passed as "Introduction", never as "1. Introduction" (which would render as "1. 1. Introduction"). The same rule applies at every level.
@@ -124,7 +122,7 @@ WORKFLOWS:
 When a user message begins with a [Workflow: <title> (id: <id>)] marker, the user has selected a workflow and you MUST apply it. Immediately call the read_workflow tool with that exact id to load the workflow's full prompt, then follow those instructions for the current turn. Do this before producing any other output or calling any other tools (aside from any document reads the workflow requires). Do not ask the user to confirm — the selection itself is the instruction to apply the workflow.
 
 DOCUMENT NAMING IN PROSE:
-The chat-local labels ("doc-0", "doc-1", "doc-N", …) are internal handles for tool calls and citation JSON ONLY. NEVER write them in your prose response or in any text the user reads — not in body text, not in headings, not in lists, not in tool-activity descriptions. The user does not know what "doc-0" means and seeing it is jarring. When referring to a document in prose, always use its filename (e.g. "the NDA draft" or "nda_v1.docx"). This rule applies to every word streamed back to the user; the only places "doc-N" identifiers are allowed are inside tool-call arguments and inside the <CITATIONS> JSON block's "doc_id" field.
+The chat-local labels ("doc-0", "doc-1", "doc-N", …) are internal handles for tool calls ONLY. NEVER write them in your prose response or in any text the user reads — not in body text, not in headings, not in lists, not in tool-activity descriptions. The user does not know what "doc-0" means and seeing it is jarring. When referring to a document in prose, always use its filename (e.g. "the NDA draft" or "nda_v1.docx"). This rule applies to every word streamed back to the user; the only place "doc-N" identifiers are allowed is inside tool-call arguments (including the doc_id parameter on read_document, find_in_document, edit_document, add_citation, and similar tools).
 
 GENERAL GUIDANCE:
 - Be precise and professional
@@ -325,6 +323,43 @@ export const LEGAL_TOOLS = [
 ];
 
 export const TOOLS = [
+    {
+        type: "function",
+        function: {
+            name: "add_citation",
+            description:
+                "Record a citation to a document you have read. Call this once per inline [N] marker in your prose. The marker number, doc_id, page, and exact verbatim quote together let the UI render a clickable, hoverable citation pill. Call this BEFORE writing the [N] marker in prose so the citation is attached when the marker streams.",
+            parameters: {
+                type: "object",
+                properties: {
+                    marker: {
+                        type: "integer",
+                        description:
+                            "The sequential [N] marker number you will write in prose (1, 2, 3, …). Must be unique within the response and assigned in the order citations appear.",
+                    },
+                    doc_id: {
+                        type: "string",
+                        description:
+                            "The chat-local document label you were given (e.g. 'doc-0'). NEVER use a filename, document UUID, or any other identifier here.",
+                    },
+                    page: {
+                        oneOf: [
+                            { type: "integer" },
+                            { type: "string" },
+                        ],
+                        description:
+                            "Page number for the quote. Use an integer for a single page (e.g. 3). Use a string 'N-M' (e.g. '41-42') if the quote spans two pages, and insert [[PAGE_BREAK]] in the quote at the page break. Refers to the [Page N] markers in the text — not page numbers printed inside the document.",
+                    },
+                    quote: {
+                        type: "string",
+                        description:
+                            "Exact verbatim text from the document supporting the claim. Keep it short (ideally ≤ 25 words) and narrowly scoped. Don't reuse one quote for multiple claims — use a separate citation for each.",
+                    },
+                },
+                required: ["marker", "doc_id", "page", "quote"],
+            },
+        },
+    },
     {
         type: "function",
         function: {
@@ -1563,6 +1598,7 @@ export async function runToolCalls(
     workflowsApplied: { workflow_id: string; title: string }[];
     docsEdited: DocEditedResult[];
     references: ReferenceResult[];
+    citationsAdded: ParsedCitation[];
 }> {
     const toolResults: unknown[] = [];
     const docsRead: { filename: string; document_id?: string }[] = [];
@@ -1576,6 +1612,7 @@ export async function runToolCalls(
     const workflowsApplied: { workflow_id: string; title: string }[] = [];
     const docsEdited: DocEditedResult[] = [];
     const references: ReferenceResult[] = [];
+    const citationsAdded: ParsedCitation[] = [];
 
     for (const tc of toolCalls) {
         let args: Record<string, unknown> = {};
@@ -1721,6 +1758,40 @@ export async function runToolCalls(
                     role: "tool",
                     tool_call_id: tc.id,
                     content: "Web search failed; please try again.",
+                });
+            }
+
+        } else if (tc.function.name === "add_citation") {
+            // Per-citation tool call. The model invokes this once per [N]
+            // marker in its prose. We validate, attribute the doc to the
+            // chat-local label (rejecting unknown docs), and accumulate.
+            // Backend assembles the final citations array after the turn
+            // ends.
+            const rawDocId = (args.doc_id as string) ?? "";
+            const docId =
+                resolveDocLabel(rawDocId, docStore, docIndex) ?? rawDocId;
+            const known = docStore.has(docId);
+            const candidate = normalizeCitation({
+                ref: args.marker,
+                doc_id: docId,
+                page: args.page,
+                quote: args.quote,
+            });
+            if (candidate && known) {
+                citationsAdded.push(candidate);
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: JSON.stringify({ ok: true, marker: candidate.ref }),
+                });
+            } else {
+                const reason = !known
+                    ? `Unknown doc_id '${rawDocId}'. Use the chat-local label (e.g. 'doc-0').`
+                    : "Invalid citation: marker must be an integer, page an integer or 'N-M' string, quote a non-empty string.";
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: JSON.stringify({ ok: false, error: reason }),
                 });
             }
 
@@ -2360,6 +2431,7 @@ export async function runToolCalls(
         workflowsApplied,
         docsEdited,
         references,
+        citationsAdded,
     };
 }
 
@@ -2382,6 +2454,37 @@ function parseCitations(text: string): ParsedCitation[] {
     } catch {
         return [];
     }
+}
+
+/**
+ * Pick the authoritative citation source for a turn. Tool-emitted citations
+ * (via `add_citation`) win when present — they're explicitly invoked by the
+ * model with structured args, so they're far more reliable than parsing a
+ * freeform <CITATIONS> JSON block. Fall back to the legacy block parse only
+ * if the model didn't call the tool, so old chats and any model regression
+ * still surface citations.
+ */
+function collectTurnCitations(
+    events: { type?: string }[] | undefined,
+    fullText: string,
+): ParsedCitation[] {
+    const fromTool: ParsedCitation[] = [];
+    if (Array.isArray(events)) {
+        for (const ev of events) {
+            if (ev?.type !== "citation_added") continue;
+            const c = ev as unknown as ParsedCitation;
+            if (typeof c.ref === "number" && typeof c.doc_id === "string") {
+                fromTool.push({
+                    ref: c.ref,
+                    doc_id: c.doc_id,
+                    page: c.page,
+                    quote: c.quote,
+                });
+            }
+        }
+    }
+    if (fromTool.length) return fromTool;
+    return parseCitations(fullText);
 }
 
 // ---------------------------------------------------------------------------
@@ -2435,6 +2538,13 @@ type AssistantEvent =
           }[];
       }
     | { type: "workflow_applied"; workflow_id: string; title: string }
+    | {
+          type: "citation_added";
+          ref: number;
+          doc_id: string;
+          page: number | string;
+          quote: string;
+      }
     | {
           type: "reference_added";
           source_kind: "legal" | "web";
@@ -2651,6 +2761,7 @@ export async function runLLMStream(params: {
                 workflowsApplied,
                 docsEdited,
                 references,
+                citationsAdded,
             } = await runToolCalls(
                     toolCalls,
                     docStore,
@@ -2673,6 +2784,15 @@ export async function runLLMStream(params: {
                     snippet: ref.snippet,
                     source_label: ref.source_label,
                     date: ref.date,
+                });
+            }
+            for (const c of citationsAdded) {
+                events.push({
+                    type: "citation_added",
+                    ref: c.ref,
+                    doc_id: c.doc_id,
+                    page: c.page,
+                    quote: c.quote,
                 });
             }
             for (const r of docsRead) {
@@ -2751,10 +2871,12 @@ export async function runLLMStream(params: {
 
     flushText();
 
-    // Parse and emit citations from <CITATIONS> block
+    // Build the citations payload. Prefer tool-emitted citations (model
+    // called `add_citation` per [N] marker — reliable), fall back to the
+    // legacy <CITATIONS> JSON block parse for old behaviour.
     const citations = buildCitations
         ? buildCitations(fullText)
-        : parseCitations(fullText).map((c) => {
+        : collectTurnCitations(events, fullText).map((c) => {
               const docInfo = resolveDoc(c.doc_id, docIndex);
               return {
                   ref: c.ref,
@@ -2782,7 +2904,11 @@ export function extractAnnotations(
     docIndex: DocIndex,
     events?: { type: string } & Record<string, unknown>[] | unknown[],
 ): unknown[] {
-    const out: unknown[] = parseCitations(fullText).map((c) => {
+    const turnCitations = collectTurnCitations(
+        events as { type?: string }[] | undefined,
+        fullText,
+    );
+    const out: unknown[] = turnCitations.map((c) => {
         const docInfo = resolveDoc(c.doc_id, docIndex);
         return {
             type: "citation_data",
