@@ -596,6 +596,42 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "vision_render_start") {
+                            // Backend is about to spend several seconds in
+                            // pdftoppm before any vLLM token can arrive.
+                            // Show a "Reading <filename>..." placeholder so
+                            // the user sees progress instead of a dead
+                            // spinner. Resolves on vision_render_done.
+                            pushEvent({
+                                type: "vision_render",
+                                filename: data.filename as string,
+                                pagesPerImage:
+                                    (data.pages_per_image as number) ?? 1,
+                                isStreaming: true,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "vision_render_done") {
+                            updateMatchingEvent(
+                                (e) =>
+                                    e.type === "vision_render" &&
+                                    (e as { filename?: string }).filename ===
+                                        data.filename &&
+                                    !!(e as { isStreaming?: boolean })
+                                        .isStreaming,
+                                (e) => ({
+                                    ...e,
+                                    isStreaming: false,
+                                    composites:
+                                        (data.composites as number) ?? 0,
+                                    latencyMs:
+                                        (data.latency_ms as number) ?? 0,
+                                }),
+                            );
+                            continue;
+                        }
+
                         if (data.type === "doc_read") {
                             updateMatchingEvent(
                                 (e) =>

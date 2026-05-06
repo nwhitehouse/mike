@@ -95,6 +95,14 @@ export type AssistantEvent =
         isStreaming?: boolean;
     }
   | {
+        type: "vision_render";
+        filename: string;
+        pagesPerImage: number;
+        isStreaming?: boolean;
+        composites?: number;
+        latencyMs?: number;
+    }
+  | {
         type: "doc_find";
         filename: string;
         query: string;

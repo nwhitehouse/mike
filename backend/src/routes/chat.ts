@@ -434,19 +434,9 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         content: string | null;
     }[];
 
-    // Vision-mode auto-on: when the chat has any attached PDF, render every
-    // page to PNG and splice them into the last user message as image_url
-    // content blocks. The model (Olava-001 served from a Qwen3-VL base via
-    // vLLM with --limit-mm-per-prompt image=30) reasons over the document
-    // visually rather than text-extraction-then-prompt. Caps at 30 pages
-    // total per request to fit vLLM's per-prompt image limit.
-    apiMessages = (await attachPdfImagesToLastUserMessage(
-        apiMessages,
-        docStore,
-    )) as typeof apiMessages;
-
-    const workflowStore = await buildWorkflowStore(userId, userEmail, db);
-
+    // Open the SSE stream BEFORE PDF rendering so vision_render_start
+    // events can reach the client while pdftoppm runs. Without this the
+    // browser sees a dead spinner for ~10s+ on large docs.
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -454,11 +444,25 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     res.flushHeaders();
 
     const write = (line: string) => res.write(line);
+    write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
+
+    // Vision-mode auto-on: when the chat has any attached PDF, render
+    // every page to PNG (4-up by default — see VISION_PAGES_PER_IMAGE)
+    // and splice them into the last user message as image_url content
+    // blocks. vLLM serves a Qwen3-VL base with --limit-mm-per-prompt
+    // image=100. Render happens here (after stream open) so the user
+    // sees vision_render_start placeholder while pdftoppm runs.
+    apiMessages = (await attachPdfImagesToLastUserMessage(
+        apiMessages,
+        docStore,
+        write,
+    )) as typeof apiMessages;
+
+    const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 
     const apiKeys = await getUserApiKeys(userId, db);
 
     try {
-        write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
 
         // Auto-detect: when the user has any research source selected
         // (legal sources picker non-empty OR globe-icon web toggle on),

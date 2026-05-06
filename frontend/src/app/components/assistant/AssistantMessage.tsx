@@ -418,6 +418,51 @@ function ReasoningBlock({
     );
 }
 
+function VisionRenderBlock({
+    filename,
+    pagesPerImage,
+    isStreaming,
+    composites,
+    showConnector,
+}: {
+    filename: string;
+    pagesPerImage: number;
+    isStreaming?: boolean;
+    composites?: number;
+    showConnector?: boolean;
+}) {
+    // Wait state for the multi-second pdftoppm render that runs before any
+    // vLLM token streams. Resolves into a "Read N pages of <filename>"
+    // confirmation once vision_render_done arrives. Page-count is derived
+    // from composites × pagesPerImage; "≈" prefix because the last
+    // composite may be partial.
+    const approxPages =
+        composites && pagesPerImage ? composites * pagesPerImage : null;
+    return (
+        <div className="flex items-start text-sm font-serif text-gray-500 relative">
+            {showConnector && (
+                <div className="absolute bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
+            )}
+            {isStreaming ? (
+                <div className="mt-2 w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
+            ) : (
+                <div className="mt-2 w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+            )}
+            <div className="ml-2 min-w-0 flex-1 whitespace-normal break-words">
+                <span className="font-medium">
+                    {isStreaming ? "Reading" : "Read"}
+                </span>{" "}
+                <span>
+                    {filename}
+                    {!isStreaming && approxPages !== null
+                        ? ` (≈${approxPages} pages)`
+                        : "..."}
+                </span>
+            </div>
+        </div>
+    );
+}
+
 function DocReadBlock({
     filename,
     onClick,
@@ -1529,6 +1574,18 @@ export function AssistantMessage({
                             ? () => onCitationClick(ann)
                             : undefined
                     }
+                    showConnector={showConnector}
+                />
+            );
+        }
+        if (event.type === "vision_render") {
+            return (
+                <VisionRenderBlock
+                    key={globalIdx}
+                    filename={event.filename}
+                    pagesPerImage={event.pagesPerImage}
+                    isStreaming={event.isStreaming}
+                    composites={event.composites}
                     showConnector={showConnector}
                 />
             );
