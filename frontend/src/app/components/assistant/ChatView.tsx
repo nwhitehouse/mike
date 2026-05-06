@@ -504,6 +504,18 @@ export function ChatView({
                                                 content={msg.content ?? ""}
                                                 files={(msg as any).files}
                                                 workflow={(msg as any).workflow}
+                                                onOpenDocument={(args) =>
+                                                    openDocument({
+                                                        documentId: args.documentId,
+                                                        filename: args.filename,
+                                                        // Resolve to current
+                                                        // version at view time
+                                                        // — chip doesn't carry
+                                                        // version metadata.
+                                                        versionId: null,
+                                                        versionNumber: null,
+                                                    })
+                                                }
                                             />
                                         ) : (
                                             <AssistantMessage
