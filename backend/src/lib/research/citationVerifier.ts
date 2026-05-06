@@ -33,7 +33,7 @@ export type VerifierResult = {
  */
 export async function verifyCitation(
     input: VerifierInput,
-    model = "olava-001",
+    model = "olava-extract",
 ): Promise<VerifierResult | null> {
     // Bound the doc text we send. Even with 256K vLLM context, the
     // verifier only needs to find a short verbatim phrase — the full
