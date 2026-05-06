@@ -1176,6 +1176,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             <UserMessage
                                                 content={msg.content ?? ""}
                                                 files={(msg as any).files}
+                                                onOpenDocument={(args) =>
+                                                    handleOpenDocument({
+                                                        documentId: args.documentId,
+                                                        filename: args.filename,
+                                                        versionId: null,
+                                                        versionNumber: null,
+                                                    })
+                                                }
                                             />
                                         </div>
                                     ) : (
