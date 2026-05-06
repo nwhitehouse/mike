@@ -1,5 +1,11 @@
 # aptPkgs is additive — leaves Nixpacks's auto-detected Node.js / npm
-# in place and layers LibreOffice on top via apt. The previous
+# in place and layers extras on top via apt. The previous
 # `nixPkgs = ["libreoffice"]` REPLACED the default and broke `npm ci`.
+#
+# poppler-utils provides `pdftoppm`, used by lib/pdfRender.ts to render
+# PDF pages to PNG for vision-mode chat. Native pdfjs+canvas glyph
+# rendering produced blank pages on this stack (canvas v3 dropped Path2D
+# and the path2d polyfill didn't fix it). pdftoppm is battle-tested and
+# spike-validated.
 [phases.setup]
-aptPkgs = ["libreoffice"]
+aptPkgs = ["libreoffice", "poppler-utils"]
