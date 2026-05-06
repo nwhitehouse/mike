@@ -10,6 +10,7 @@ import { downloadFile, uploadFile, storageKey } from "../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../lib/convert";
 import { checkProjectAccess } from "../lib/access";
 import { singleFileUpload, uploadConcurrencyLimit } from "../lib/upload";
+import { kickOffVisionPrerender } from "../lib/visionPrerender";
 
 export const projectsRouter = Router();
 const ALLOWED_TYPES = new Set(["pdf", "docx", "doc"]);
@@ -703,6 +704,16 @@ export async function handleDocumentUpload(
         updated_at: new Date().toISOString(),
       })
       .eq("id", docId);
+
+    // Fire-and-forget vision pre-render (PDFs only — vision mode is
+    // gated to file_type === "pdf"). Warms the R2 manifest cache so the
+    // user's first chat against this doc skips the live render cost.
+    if (suffix === "pdf" && pdfStoragePath) {
+      kickOffVisionPrerender({
+        documentId: docId,
+        storagePath: pdfStoragePath,
+      });
+    }
 
     const { data: updated } = await db
       .from("documents")

@@ -504,3 +504,11 @@
     0%, 100% { opacity: 0.18; }
     50%      { opacity: 0.95; }
 }
+
+/* Diagonal moving highlight used by ChatInput attachment chips while
+   their PDF is pre-rendering. Background-position cycles to slide the
+   gradient across the chip; the chip's own bg shows through. */
+@keyframes chip-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}

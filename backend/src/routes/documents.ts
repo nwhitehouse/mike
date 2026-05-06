@@ -23,6 +23,10 @@ import {
 } from "../lib/documentVersions";
 import { ensureDocAccess } from "../lib/access";
 import { singleFileUpload, uploadConcurrencyLimit } from "../lib/upload";
+import {
+    kickOffVisionPrerender,
+    visionStatusFor,
+} from "../lib/visionPrerender";
 
 export const documentsRouter = Router();
 const ALLOWED_TYPES = new Set(["pdf", "docx", "doc"]);
@@ -205,6 +209,61 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
   res.setHeader("Content-Disposition", 'attachment; filename="documents.zip"');
   res.send(content);
 });
+
+// GET /single-documents/:documentId/vision-status
+// Returns the current vision-mode pre-render state for this document.
+// Frontend polls after upload to know when the chat input's send button
+// can be enabled (chip stops shimmering, send is hot).
+//
+// Status values:
+//   "pending" — render is in flight (or the caller raced ahead of the
+//               upload route's kick-off; treated the same way client-side)
+//   "ready"   — composites cached in R2 and/or memory; chat will be fast
+//   "failed"  — last attempt errored; chat falls back to live render
+//   "missing" — never pre-rendered (e.g. doc uploaded before this feature
+//               existed); chat will live-render on first use
+documentsRouter.get(
+    "/:documentId/vision-status",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { documentId } = req.params;
+        const db = createServerSupabase();
+
+        const { data: doc, error } = await db
+            .from("documents")
+            .select("id, filename, file_type, user_id, project_id")
+            .eq("id", documentId)
+            .single();
+        if (error || !doc) {
+            return void res.status(404).json({ detail: "Document not found" });
+        }
+        const access = await ensureDocAccess(doc, userId, userEmail, db);
+        if (!access.ok) {
+            return void res.status(404).json({ detail: "Document not found" });
+        }
+
+        // Vision mode only fires for PDFs today — short-circuit so the
+        // frontend doesn't poll forever on a DOCX that will never have
+        // pre-rendered composites.
+        if (doc.file_type !== "pdf") {
+            return void res.json({ status: "ready" });
+        }
+
+        const active = await loadActiveVersion(documentId, db, null);
+        if (!active) {
+            return void res
+                .status(404)
+                .json({ detail: "No file available" });
+        }
+        const status = await visionStatusFor({
+            documentId,
+            storagePath: active.storage_path,
+        });
+        res.json({ status });
+    },
+);
 
 // GET /single-documents/:documentId/url
 // Optional ?version_id= selects a specific tracked-changes version.
@@ -534,6 +593,15 @@ documentsRouter.post(
       .from("documents")
       .update(documentsUpdate)
       .eq("id", documentId);
+
+    // Fire-and-forget vision pre-render for the new version's PDF. Same
+    // gating as initial upload: only PDFs benefit from vision mode today.
+    if (suffix === "pdf" && pdfStoragePath) {
+      kickOffVisionPrerender({
+        documentId,
+        storagePath: pdfStoragePath,
+      });
+    }
 
     res.status(201).json(versionRow);
   },
@@ -905,6 +973,16 @@ async function handleDocumentUpload(
         updated_at: new Date().toISOString(),
       })
       .eq("id", docId);
+
+    // Fire-and-forget vision pre-render so the cache is warm by the time
+    // the user opens a chat against this doc. Only PDFs — DOCX vision
+    // mode isn't wired (visionContext.ts filters by file_type === "pdf").
+    if (suffix === "pdf" && pdfStoragePath) {
+      kickOffVisionPrerender({
+        documentId: docId,
+        storagePath: pdfStoragePath,
+      });
+    }
 
     const { data: updated } = await db
       .from("documents")

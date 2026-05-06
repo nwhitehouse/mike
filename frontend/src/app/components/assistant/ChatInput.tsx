@@ -25,6 +25,7 @@ import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
 import { ModelToggle } from "./ModelToggle";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
 import { useUserProfile } from "@/contexts/UserProfileContext";
+import { useVisionStatus } from "@/app/hooks/useVisionStatus";
 import {
     getModelProvider,
     isModelAvailable,
@@ -62,6 +63,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 ) {
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<MikeDocument[]>([]);
+    // Vision-mode pre-render status per attached PDF. While any attached
+    // PDF is "pending" the chip shimmers and the Send button is disabled
+    // — sending a chat against an unrendered doc would force the chat
+    // path to live-render (~10s+), which is exactly what feat-010 is
+    // trying to eliminate.
+    const visionStatus = useVisionStatus(attachedDocs);
+    const anyDocPending = Array.from(visionStatus.values()).some(
+        (s) => s === "pending",
+    );
     const [selectedLegalSources, setSelectedLegalSources] = useState<string[]>([]);
     const [webSearchEnabled, setWebSearchEnabled] = useState(false);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
@@ -120,6 +130,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     const handleSubmit = () => {
         const query = value.trim();
         if (!query || isLoading) return;
+        // Belt-and-braces: the button is disabled while any PDF is
+        // pre-rendering, but the Enter keypath could otherwise sneak past.
+        if (anyDocPending) return;
         if (!isModelAvailable(model, apiKeys)) {
             setApiKeyModalProvider(getModelProvider(model));
             return;
@@ -195,10 +208,24 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             {attachedDocs.map((doc) => {
                                 const ft = doc.file_type?.toLowerCase();
                                 const isPdf = ft === "pdf";
+                                const status = visionStatus.get(doc.id);
+                                const pending = status === "pending";
+                                // Shimmer overlay communicates "the chat
+                                // can't fire yet against this doc". A
+                                // diagonal moving gradient on top of the
+                                // normal chip background.
+                                const shimmerOverlay = pending
+                                    ? "before:absolute before:inset-0 before:rounded-full before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:bg-[length:200%_100%] before:animate-[chip-shimmer_1.6s_ease-in-out_infinite] before:pointer-events-none"
+                                    : "";
                                 return (
                                     <div
                                         key={doc.id}
-                                        className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs text-white shadow border border-white/20 bg-black backdrop-blur-sm"
+                                        className={`relative overflow-hidden inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs text-white shadow border border-white/20 bg-black backdrop-blur-sm ${shimmerOverlay}`}
+                                        title={
+                                            pending
+                                                ? "Reading document — chat will be ready in a moment…"
+                                                : undefined
+                                        }
                                     >
                                         {isPdf ? (
                                             <FileText className="h-2.5 w-2.5 shrink-0 text-red-400" />
@@ -217,7 +244,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                                     ),
                                                 )
                                             }
-                                            className="rounded-full p-0.5 ml-0.5 text-white/60 hover:text-white hover:bg-white/20 transition-colors"
+                                            className="rounded-full p-0.5 ml-0.5 text-white/60 hover:text-white hover:bg-white/20 transition-colors relative z-10"
                                         >
                                             <X className="h-2.5 w-2.5" />
                                         </button>
@@ -309,7 +336,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                 type="button"
                                 className="relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[10px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border border-white/30 active:enabled:scale-95 transition-all duration-150"
                                 onClick={handleActionClick}
-                                disabled={!isLoading && !value.trim()}
+                                disabled={
+                                    !isLoading &&
+                                    (!value.trim() || anyDocPending)
+                                }
+                                title={
+                                    anyDocPending
+                                        ? "Reading attached document — please wait a moment"
+                                        : undefined
+                                }
                             >
                                 {isLoading ? (
                                     <Square
