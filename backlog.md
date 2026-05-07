@@ -455,6 +455,295 @@ Status endpoint combines in-memory render-tracker map with R2 manifest existence
 
 ---
 
+## Sprint 3: Harness hardening + memory (planned 2026-05-07)
+
+Goal: make the Finch agent loop more robust by porting distilled patterns from `/Users/nick.whitehouse/Coding/work___` (Onit Q), and fix the in-chat context loss caused by tool results not persisting between turns. Seven stories, partially independent.
+
+**Direction note (decided 2026-05-07).** Earlier consolidation discussion landed on: stick with Finch as the demo base, port good ideas from work___ in distilled form. Explicitly NOT porting work___'s 5-tier permission model, sub-agent spawning, 4-stage compaction pipeline, or 8 agent primitives — those solve problems Finch doesn't have. This sprint takes the smaller, higher-ROI patterns only.
+
+**Sequencing recommendation.**
+1. **feat-017 (memory) first** — biggest user pain ("finch loses context in chat"). Demonstrably broken today.
+2. **feat-013 (tool registry) second** — largest refactor; landing it early lets feat-014 / feat-016 build on the cleaner structure.
+3. **bug-006 + bug-007** — opportunistic 1-hour fills between bigger stories. Both clear `SECURITY.md` items.
+4. **feat-014, feat-015, feat-016** — independent of each other after feat-013; can parallelise.
+
+---
+
+### feat-017 Memory hierarchy: persist tool results (Tier 1 only — in-chat replay)
+**Status:** in-progress
+**Branch:** `feat-017-memory-hierarchy`
+**Priority:** High — root cause of "finch loses context in chat"
+**Size:** Medium (~1 day)
+
+**Scope decision (2026-05-07).** v1 ships **Tier 1 only** (in-chat tool result replay). Tier 2 (per-project persistent facts across chats) is **deferred to feat-018** — user said "I just want chat to remember what we're talking about through the whole conversation at a minimum. It doesn't need to be so detailed yet." The Tier 2 design below is preserved here as the spec for feat-018.
+
+**Problem.** Two distinct context-loss failures, often confused as one:
+1. **Within-chat:** `chatTools.ts:710 buildMessages()` rebuilds the LLM input from `chat_messages` rows, which only stores `user` and `assistant` text — tool calls and tool results from previous turns are dropped. The system prompt at `chatTools.ts:730` admits this defeat: *"You do NOT retain document content between conversation turns. You MUST call read_document at the start of every response."* So every turn re-reads every doc, costing latency, tokens, and breaking the "remembers what we discussed" UX.
+2. **Across-chats:** Each new chat starts blank. Project-level facts (parties, opposing counsel, key dates, prior conclusions) are not surfaced. User has to re-explain context every chat.
+
+**Approach (two-tier, distilled from work___'s 4-tier model — dropped agent-memory and org-memory tiers as speculative).**
+
+**Tier 1 — Session memory (in-chat tool replay).** Persist tool calls + tool results into `chat_messages` so `buildMessages()` can replay the full sequence to the LLM next turn.
+
+- Schema: add columns `tool_call_id text`, `tool_name text` to `chat_messages`. Allow `role IN ('user','assistant','tool')`.
+- Persistence: in `chatTools.ts runToolCalls()`, after each tool result is produced, insert a `role:'tool'` row alongside the assistant row. Assistant rows already keep their `<tool_call>...</tool_call>` markup in content — fine for Olava, that's how it formatted them the first time.
+- Replay: `buildMessages()` includes all rows in order. Olava sees prior tool calls as part of assistant content (markup intact) and tool results as `role:'tool'` content. This is exactly what it sees mid-turn already — no LoRA retraining needed.
+- Delete the "you do NOT retain document content" warning from the system prompt. Replace with: *"Tool results from earlier in this conversation are included in the message history — refer to them rather than re-reading documents you've already inspected, unless the user implies the doc may have changed."*
+
+**Tier 2 — Project memory (persistent facts across chats).** Per-project key/value store of facts surfaced into every chat in that project.
+
+- Schema: new table `project_memory(id, project_id, key, value, source text, updated_at)`. RLS by project_id.
+- Write path v1: manual only — `POST /projects/:id/memory` for user-pinned facts. No auto-extraction yet (a v2 nice-to-have via a background extractor agent).
+- Read path: `projectChat.ts` loads memory rows at session start, injects into system prompt as `KNOWN FACTS:\n- {key}: {value}\n- ...`.
+- UI: a "Memory" panel in the project sidebar listing facts with edit/delete. Reuse existing project-settings styling.
+
+**Files to create.**
+- `backend/migrations/003_memory_persistence.sql` — adds tool columns to chat_messages + creates project_memory table + RLS.
+- `frontend/src/app/components/projects/MemoryPanel.tsx` — CRUD UI, ~150 LOC.
+
+**Files to modify.**
+- `backend/src/lib/chatTools.ts` — `runToolCalls()` persists tool rows; `buildMessages()` replays them; system prompt warning removed.
+- `backend/src/routes/projectChat.ts` and `chat.ts` — load project_memory at session start, inject into systemPromptExtra.
+- `backend/src/routes/projects.ts` — add `GET/POST/PUT/DELETE /projects/:id/memory` endpoints.
+- `frontend/src/app/projects/[id]/page.tsx` (or wherever the project sidebar lives) — mount MemoryPanel.
+
+**Key decisions.**
+- **Why store assistant `<tool_call>` markup verbatim, not structured tool_calls?** Olava emits markup natively; persisting it round-trips cleanly without translation. If we ever switch back to a Hermes-format model we'll re-derive — one-way migration when needed.
+- **Tier 2 manual-only for v1.** Auto-extraction needs an extractor agent + dedup logic + UX for "we learned X about your project." That's a sprint of its own; ship the storage + UI now, add auto-write later.
+- **Why a dedicated table not JSON in `projects.metadata`?** Wanting RLS, indexing on key, audit trail of updated_at. Cheap to over-build the storage even if v1 UX is bare.
+- **Compaction for long chats: explicitly out of scope.** Anthropic prompt caching + tool-result-replay handles the typical case. Add a rolling-summary tier (work___'s stage-2 compaction) only when chats actually start hitting the window — measure first.
+
+**Risks.**
+- **Migration on a live DB.** chat_messages columns are additive (nullable) so safe. project_memory is new. RLS must be applied or it's a tenant leak. Take a Supabase snapshot before applying (`SECURITY_HARDENING.md` pattern).
+- **Older chats predate the change.** Tool history before the migration is gone forever — those chats remain context-blind. Acceptable; users start a new chat.
+- **Token budget inflation.** Replaying every tool result inflates context. For most chats this is what we want. For pathological cases (50-turn chats with 50 large doc reads) we'll hit the window — defer until measured.
+
+**Test plan.**
+- `tsc --noEmit` clean.
+- Apply migration to local Supabase, smoke-test chat in dev.
+- Manual: ask "what's in doc-1?" → confirm `read_document` fires. Then ask "what about clause 3 in doc-1?" → confirm `read_document` does NOT fire (model uses cached result).
+- Manual: ask the same in turn 3 with a different question → confirm no re-read.
+- Manual: pin a project memory fact (e.g., "opposing counsel: Acme LLP"). New chat in same project → confirm fact appears in system prompt (check backend log).
+- Manual: edit/delete memory fact → round-trip.
+- Regression: `edit_document`, `generate_docx`, `legal_search`, `web_search` still end-to-end.
+
+**Acceptance.**
+- Same chat, second turn does NOT re-read documents already read in turn 1.
+- The "you do NOT retain document content" line is gone from `SYSTEM_PROMPT`.
+- Project memory CRUD round-trips through the UI.
+- Project memory facts visible in the system prompt (verifiable via backend log).
+- No regression in existing tool flows.
+
+---
+
+### feat-013 Tool registry split (extract tools from chatTools.ts monolith)
+**Status:** ready
+**Branch:** `feat-013-tool-registry`
+**Priority:** High — biggest maintainability win, unlocks cleaner work on subsequent stories
+**Size:** Medium (~1.5 days)
+
+**Problem.** `backend/src/lib/chatTools.ts` is a 3,396-line monolith mixing: a 3,800-word prose system prompt, ~9 tool schemas embedded as inline objects, dispatch switch statements, the streaming loop, the message builder, and ad-hoc helpers. Adding or modifying a tool requires edits in multiple sections of the same file, system prompt drift from schema, and merge-conflict pain on parallel branches. work___'s `backend/services/tool_catalog.py` (11KB) shows the cleaner pattern: declarative tool modules + a registry.
+
+**Approach.** Each tool becomes a TS module exporting `{schema, handler}`. The main chat loop iterates a registry; the system prompt drops to behavior-only with the tool list auto-generated.
+
+**Files to create.**
+- `backend/src/lib/tools/types.ts` — `Tool` interface: `{ name, description, parameters: ZodSchema, handler: (args, ctx) => Promise<ToolResult> }`. Zod gives runtime validation AND JSON-Schema generation via `zod-to-json-schema`.
+- `backend/src/lib/tools/registry.ts` — collects tools, exposes `getActiveTools(ctx) => Tool[]` (with conditional inclusion for legal sources, web search, table cells) and `dispatch(name, args, ctx)`.
+- `backend/src/lib/tools/{readDocument,editDocument,generateDocx,findInDocument,readWorkflow,readTableCells,legalSearch,webSearch}.ts` — one file per tool, ~50–150 LOC each.
+
+**Files to modify.**
+- `backend/src/lib/chatTools.ts` — replace inline tool definitions and dispatch switch with calls to registry. Should drop ~1,500 LOC. Keep `buildMessages`, the streaming loop, and run orchestration.
+- System prompt — strip per-tool prose; keep behavior guidance (citation format, DOCX rules, numbered sections). Append `Available tools:\n${registry.describeForPrompt(ctx)}` so the prompt always matches the active tool set.
+
+**Key decisions.**
+- **Zod, not raw JSON Schema.** Runtime validation catches malformed LLM args before dispatch; JSON-Schema generated via `zod-to-json-schema` for the LLM. Already aligned with TS-everywhere stack. ~30KB added.
+- **Behavior stays in system prompt, schema doesn't.** Tool descriptions live in tool schemas (the LLM's tool list). Cross-cutting behavior (citation format, "use markdown links") stays in the system prompt.
+- **No backward-compat shim.** Everything moves at once. Branch isolates the change.
+- **Conditional tools (legal, web, table cells) become predicates on the tool's exported entry.** Registry filters at lookup time using the same `sources`/`scope` context Finch already plumbs.
+
+**Risks.**
+- **Behavior drift.** Tool descriptions in the new schema files must match what was previously in the prose system prompt. Risk of subtle wording change → model behaves differently. Mitigation: side-by-side compare each tool's old prose with new description before merge.
+- **Olava LoRA trained on specific phrasing.** If a tool's description influences how Olava emits its `<tool_call>`, changes could shift behavior. Mitigation: keep the old name + arg shape exactly; only restructure where the description lives.
+
+**Test plan.**
+- `tsc --noEmit` clean.
+- Manual regression on every existing tool: read, edit, generate, find, workflow, table cells, legal search, web search.
+- Diff the rendered system prompt before/after for a fixed chat scenario; confirm no semantic loss.
+
+**Acceptance.**
+- Each tool lives in its own file under `backend/src/lib/tools/`.
+- `chatTools.ts` shrinks by ~1,500 LOC.
+- Adding a new tool = creating one file + one registry export, no chatTools.ts edits beyond import.
+- All existing tool flows work end-to-end.
+
+---
+
+### feat-014 Loop controller with stall detection
+**Status:** ready
+**Branch:** `feat-014-loop-controller`
+**Priority:** Medium-High — prevents runaway agent loops
+**Size:** Medium (~1 day)
+
+**Problem.** `chatTools.ts runLLMStream()` runs until the model emits no tool call or finishes. No guard rails: a tool that keeps failing + a model that keeps retrying = unbounded spend. work___'s `backend/services/loop_controller.py` (10KB, with unit tests in `test_loop_controller.py`) is the proven pattern; port it.
+
+**Approach.** Wrap the tool-call loop in a controller that tracks step count, repeated identical calls, repeated identical errors, wall-clock elapsed. On threshold breach, emit a `loop.escalated` event (writes to feat-015 audit), append a system message *"You have reached the step budget. Please stop calling tools and synthesise an answer from what you have."*, and force the next iteration to be the final one.
+
+**Files to create.**
+- `backend/src/lib/loopController.ts` — class `LoopController` with `recordStep({tool, args, error?})`, `shouldEscalate() → {reason, action} | null`. Independent of chat code; unit-testable.
+- `backend/tests/loopController.test.ts` — port the cases from work___'s `test_loop_controller.py`.
+
+**Files to modify.**
+- `backend/src/lib/chatTools.ts runLLMStream()` — instantiate controller; call `recordStep` after each tool dispatch; check `shouldEscalate` before next iteration.
+
+**Thresholds (env-tunable).**
+- `MAX_STEPS=12` (was 15 in work___; Finch chats are typically smaller).
+- `MAX_REPEAT_TOOL_ERRORS=3` (3 identical tool errors → escalate).
+- `MAX_REPEAT_TOOL_CALLS=3` (same tool + same args 3× → escalate).
+- `WALL_CLOCK_MS=60_000` (1 min total tool-loop budget).
+
+**Key decisions.**
+- **Synthesise rather than abort.** When budget hits, force the model to summarise what it has rather than fail the chat. Better UX than a red error.
+- **Don't gate the research orchestrator (feat-005).** It has its own 45s wall-clock. Two budgets are fine; they protect different surfaces.
+- **No retry logic in the controller.** Retry is the model's job (it sees the tool error and decides). The controller only escalates on patterns.
+
+**Risks.**
+- **Premature escalation.** A legitimate 10-step research chain could trip MAX_STEPS. Mitigation: tune in dev; thresholds in env.
+- **Budget bypass via tool composition.** A tool that internally fans out (e.g., legal_search hitting 4 sources) counts as one step. That's correct.
+
+**Test plan.**
+- Unit tests in `loopController.test.ts`: each escalation reason has positive + negative case.
+- Manual: induce a tool error and confirm escalation message after 3 retries.
+- Manual: normal chat flows are not affected.
+
+**Acceptance.**
+- LoopController unit tests pass.
+- Pathological loop (force a tool to always error) escalates within 3 retries with a user-visible message, not silently.
+- Normal chats unaffected.
+
+---
+
+### feat-015 Agent events audit table
+**Status:** ready
+**Branch:** `feat-015-agent-events`
+**Priority:** Medium — replaces 61 `console.log` calls with a structured trail; enables replay later
+**Size:** Small-Medium (~½ day)
+
+**Problem.** Today the agent loop's debug trail is `console.log`s scattered across `chatTools.ts` and `olava.ts` (61 calls). Reconstructing what an agent did in prod requires reading Railway logs and stitching by chat_id. work___ persists every event to a `SessionEvent` table — cheap insurance giving audit + replay + better debugging.
+
+**Approach.** New table `agent_events`. Insert one row per significant event in the chat loop. Don't change SSE event shape (frontend unchanged). Single-purpose append-only log.
+
+**Files to create.**
+- `backend/migrations/004_agent_events.sql` — table with columns: `id, chat_id, project_id, user_id, type, payload jsonb, created_at`. Indexes on `chat_id` and `created_at`. RLS: select-by-user via project membership.
+- `backend/src/lib/agentEvents.ts` — `recordEvent({chatId, type, payload})`. Fire-and-forget with `void` return; failures logged not thrown.
+
+**Files to modify.**
+- `backend/src/lib/chatTools.ts` — call recordEvent at: turn start, tool_call_start, tool_result, tool_error, model chunk milestones, turn end.
+- `backend/src/lib/llm/olava.ts` — record stream lifecycle events (start, first_token_ms, finish_reason).
+
+**Event taxonomy (mirrors existing SSE event names where possible).**
+- `turn.started`
+- `model.first_token` (with latency_ms)
+- `tool.call_started` (name, args)
+- `tool.call_succeeded` (name, latency_ms, result_length)
+- `tool.call_failed` (name, error_code, latency_ms) — pairs with feat-016 envelope
+- `loop.escalated` (reason) — written by feat-014
+- `turn.completed` (total_tokens, total_steps, total_latency_ms)
+
+**Key decisions.**
+- **Fire-and-forget.** A failed audit insert must not break a chat. Wrap in try/catch.
+- **Don't log message content.** `payload` carries metadata (tool name, latency, error code) but not user prompts or doc text — keep audit log small and PII-light. Full content lives in `chat_messages` already.
+- **Don't replicate SSE.** SSE is the wire format to the frontend; agent_events is the backend audit. Different consumers, different lifecycles.
+
+**Risks.**
+- **DB write rate.** Each chat emits ~10–30 events. Negligible at current scale; add batched insert path if traffic grows.
+- **PII leakage.** Strict review of what goes into `payload`. No content fields by default.
+
+**Test plan.**
+- Apply migration locally.
+- Manual: send a chat, query `select * from agent_events where chat_id = '...' order by created_at` — verify expected sequence.
+- Manual: induce a tool failure, verify `tool.call_failed` row.
+- Verify no chat regression if the table is dropped (catch-all suppression works).
+
+**Acceptance.**
+- All listed event types are written for a normal chat.
+- Querying by chat_id reconstructs the agent's path.
+- No chat behaviour change visible to users.
+
+---
+
+### feat-016 Structured tool-result error envelope
+**Status:** ready
+**Branch:** `feat-016-tool-error-envelope`
+**Priority:** Medium — improves model error recovery and structured logging
+**Size:** Small-Medium (~½ day)
+**Depends on:** feat-013 (cleanest if the tool registry exists; can land before with an adapter shim).
+
+**Problem.** Tool errors today are returned as prose strings stuffed into `role:'tool'` content (e.g., `"document not found"`). The model can't distinguish *retryable* from *unrecoverable*, and observability has no structured signal to count failures by type.
+
+**Approach.** All tool handlers return `{ ok: true, content } | { ok: false, error: { code, message, retryable } }`. The dispatcher renders the failure case to the model as a structured prose blurb (`"Tool error (code=NOT_FOUND, retryable=false): document not found"`) and emits a `tool.call_failed` agent_event (feat-015) with the structured payload.
+
+**Files to modify.**
+- `backend/src/lib/tools/types.ts` (from feat-013) — define `ToolResult` discriminated union.
+- Each tool module (`readDocument.ts`, etc.) — return `ok:true|false` envelopes.
+- Registry dispatch in `registry.ts` — render failures consistently for the model.
+
+**Initial error code vocabulary.**
+- `NOT_FOUND`, `PERMISSION_DENIED`, `RATE_LIMITED` (retryable), `INVALID_ARG`, `UPSTREAM_TIMEOUT` (retryable), `UPSTREAM_ERROR` (retryable), `INTERNAL`.
+
+**Key decisions.**
+- **Render failures as prose for the model.** Olava-001 wasn't trained on a structured error type; prose works. The structured envelope is for the dispatcher, the audit, and human debugging.
+- **Keep tool happy-path content unchanged.** Only the failure path is wrapped.
+
+**Test plan.**
+- Unit: each tool's failure paths return correct envelope shape.
+- Manual: induce each error class once; observe the model retries on retryable codes only, gives up on others.
+
+**Acceptance.**
+- All tools return the discriminated union.
+- The model sees structured error prose; agent_events records structured payload.
+
+---
+
+### bug-006 Tighten Olava tool-call parser (require `</parameter>`)
+**Status:** ready
+**Branch:** `bug-006-strict-parser`
+**Priority:** Medium — `SECURITY.md` H7. Low practical exploitability, easy fix.
+**Size:** Small (~1 hour)
+
+**Problem.** `backend/src/lib/llm/olava.ts:78-117 parseCustomToolCall()` splits on `<parameter=KEY>` and reads until the next opener. It doesn't require or validate `</parameter>` close tags. A value containing literal `<parameter=foo>` text misparses.
+
+**Approach.** Rewrite the inner regex to match `<parameter=([^>]+)>(.*?)</parameter>` non-greedy with the `s` flag. Treat absence of close tag as a parse failure; log and fall back to the unparsed string-result path.
+
+**Files to modify.**
+- `backend/src/lib/llm/olava.ts` — `parseCustomToolCall()` only.
+- `backend/tests/olavaParser.test.ts` — new test file: well-formed, missing close tag, embedded `<parameter=` in value, embedded `</parameter>` in value, multi-parameter ordering.
+
+**Acceptance.**
+- Parser tests pass for all listed cases.
+- No regression on existing well-formed tool calls (manual `read_document` and `edit_document` flows).
+
+---
+
+### bug-007 Cap tabular generate concurrency
+**Status:** ready
+**Branch:** `bug-007-tabular-concurrency`
+**Priority:** Medium — `SECURITY.md` H1, cost-DoS surface.
+**Size:** Small (~1 hour)
+
+**Problem.** `backend/src/routes/tabular.ts:960` fans out N parallel LLM calls for N documents with `Promise.all`. A user with 200 documents triggers 200 simultaneous LLM calls. Cost-DoS by accident or malice.
+
+**Approach.** Add `p-limit` and cap concurrency at 5 in the tabular generation path.
+
+**Files to modify.**
+- `backend/src/routes/tabular.ts` — wrap the `Promise.all` in `pLimit(5)`.
+- `backend/package.json` — add `p-limit` if not already a direct dep.
+
+**Acceptance.**
+- 200-doc tabular generate sends at most 5 LLM requests in flight.
+- Throughput unchanged for small N (≤5).
+
+---
+
 ## Open items (queued for next session)
 
 ### bug-005 Verifier blocks [DONE] for ~12s after model finishes
@@ -474,6 +763,14 @@ User leans (B). 1-line change.
 **Priority:** Medium — second-biggest first-token latency
 
 vLLM has `--enable-prefix-caching` which caches KV across requests with shared prompt prefixes. With our system prompt + image content as the prefix, second chat against the same doc would skip vision encoding entirely. ~5–15s savings on repeat chats. No backend code change.
+
+### feat-018 Project memory (Tier 2 of feat-017): per-project persistent facts
+**Status:** ready, deferred from feat-017 v1
+**Priority:** Medium — pick up if chats-across-sessions context loss is still felt after feat-017 ships
+
+Per-project key/value store of facts surfaced into every chat in that project. Schema: `project_memory(id, project_id, key, value, source, created_by, created_at, updated_at)` with RLS by project_id (same pattern as `projects` policies). Manual CRUD via `GET/POST/PUT/DELETE /projects/:id/memory`. Loaded at chat session start, injected into system prompt as `KNOWN FACTS:\n- key: value\n- ...`. Frontend: `MemoryPanel.tsx` in the project sidebar with inline edit/add. Auto-extraction from chat content (background extractor agent) is a v2 nice-to-have, out of scope.
+
+Full design preserved in the feat-017 entry above (the "Tier 2 — Project memory" section was originally part of feat-017 and was scoped out per user request).
 
 ### feat-012 Text-as-image compression for chat history / tool results
 **Status:** spike done, decision deferred
