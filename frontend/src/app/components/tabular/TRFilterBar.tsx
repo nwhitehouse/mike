@@ -9,7 +9,7 @@
  * a controlled view over props.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, Filter, X } from "lucide-react";
 import type { ColumnConfig } from "../shared/types";
 import {
@@ -55,6 +55,21 @@ export function TRFilterBar({
 }: TRFilterBarProps) {
     const [adderOpen, setAdderOpen] = useState(false);
     const adderRef = useRef<HTMLDivElement>(null);
+
+    // The popover is w-80 (320px). Anchor it to the side of the trigger
+    // that keeps it on-screen: if the trigger is more than POPOVER_WIDTH
+    // from the right edge use left-0, otherwise right-0. Recompute on
+    // every open since the row wraps and the trigger position varies
+    // with how many filters are active.
+    const [popoverSide, setPopoverSide] = useState<"left" | "right">("left");
+    useLayoutEffect(() => {
+        if (!adderOpen || !adderRef.current) return;
+        const rect = adderRef.current.getBoundingClientRect();
+        const POPOVER_WIDTH = 320;
+        const VIEWPORT_PADDING = 16;
+        const room = window.innerWidth - rect.left - VIEWPORT_PADDING;
+        setPopoverSide(room >= POPOVER_WIDTH ? "left" : "right");
+    }, [adderOpen]);
 
     // Close the adder on outside click while it's open.
     useEffect(() => {
@@ -105,6 +120,7 @@ export function TRFilterBar({
                     <AddFilterPopover
                         columns={columns}
                         existing={filters}
+                        side={popoverSide}
                         onAdd={(f) => {
                             // Flag and Verified each have at most one active
                             // filter — same kind replaces, doesn't stack. The
@@ -204,11 +220,16 @@ function ActiveFilterPill({
 function AddFilterPopover({
     columns,
     existing,
+    side,
     onAdd,
     onClose,
 }: {
     columns: ColumnConfig[];
     existing: TRFilter[];
+    /** Which edge of the trigger to anchor the popover at — picked by the
+     *  parent based on viewport-relative position of the + Add filter
+     *  button, so the 320px popover always stays on-screen. */
+    side: "left" | "right";
     onAdd: (f: TRFilter) => void;
     onClose: () => void;
 }) {
@@ -271,7 +292,7 @@ function AddFilterPopover({
     }
 
     return (
-        <div className="absolute right-0 top-full z-[80] mt-1.5 w-80 rounded-xl border border-border bg-card p-3 shadow-lg">
+        <div className={`absolute ${side === "left" ? "left-0" : "right-0"} top-full z-[80] mt-1.5 w-80 rounded-xl border border-border bg-card p-3 shadow-lg`}>
             <div className="flex items-center justify-between mb-3">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Add filter
