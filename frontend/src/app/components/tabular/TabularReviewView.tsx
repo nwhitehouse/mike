@@ -388,6 +388,23 @@ export function TRView({ reviewId, projectId }: Props) {
 
                 await new Promise((r) => setTimeout(r, intervalMs));
             }
+            // The delta loop above only updates cells that already exist
+            // in `prev` state — anything completed in the gap between the
+            // last delta and the terminal-status flip can be silently
+            // dropped. Refetch the canonical review state once the job is
+            // resolved so the UI matches the DB without forcing a manual
+            // page refresh.
+            if (!myToken.cancelled) {
+                try {
+                    const fresh = await getTabularReview(reviewId);
+                    if (!myToken.cancelled) {
+                        setCells(fresh.cells);
+                        setDocuments(fresh.documents);
+                    }
+                } catch (err) {
+                    console.warn("[tabular-poll] post-job refetch failed", err);
+                }
+            }
         } finally {
             if (activeJobIdRef.current === jobId) {
                 activeJobIdRef.current = null;
