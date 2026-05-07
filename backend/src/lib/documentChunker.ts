@@ -66,6 +66,11 @@ function pageAtOffset(markers: PageMarker[], offset: number): number | null {
  */
 export function chunkDocument(text: string): DocumentChunk[] {
     if (!text || text.trim().length === 0) return [];
+    // Strip NUL bytes — pdfjs occasionally emits them in extracted text,
+    // and Postgres' text/jsonb encoding rejects   with "unsupported
+    // Unicode escape sequence". Cheap to do upfront so the chunker and
+    // the page-marker scanner both see clean text.
+    text = text.replace(/\u0000/g, "");
     const markers = findPageMarkers(text);
     const out: DocumentChunk[] = [];
     let pos = 0;
