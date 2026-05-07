@@ -38,6 +38,7 @@ import type {
     TabularReview,
 } from "../shared/types";
 import { AddColumnModal } from "./AddColumnModal";
+import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 import { AddDocumentsModal } from "../shared/AddDocumentsModal";
 import { AddProjectDocsModal } from "../shared/AddProjectDocsModal";
 import { PeopleModal } from "../shared/PeopleModal";
@@ -923,6 +924,19 @@ export function TRView({ reviewId, projectId }: Props) {
                                 )}
                             </div>
                         )}
+                        {/* feat-021 — manage columns popover sits left of
+                            Add Documents in the toolbar. */}
+                        <ColumnVisibilityMenu
+                            columns={columns}
+                            hiddenColumnIndices={hiddenColumnIndices}
+                            onToggleColumn={handleToggleColumnVisibility}
+                            onShowAll={handleShowAllColumns}
+                            onHideAll={handleHideAllColumns}
+                            onDeleteColumn={handleDeleteColumn}
+                            disabled={
+                                loading || savingColumn || savingColumnsConfig
+                            }
+                        />
                         <button
                             onClick={() => setAddDocsOpen(true)}
                             disabled={loading || savingColumnsConfig}
@@ -1002,11 +1016,6 @@ export function TRView({ reviewId, projectId }: Props) {
                         wrapText={wrapText}
                         onHideColumn={handleHideColumn}
                         onReprocessColumn={handleReprocessColumn}
-                        allColumns={columns}
-                        hiddenColumnIndices={hiddenColumnIndices}
-                        onToggleColumnVisibility={handleToggleColumnVisibility}
-                        onShowAllColumns={handleShowAllColumns}
-                        onHideAllColumns={handleHideAllColumns}
                     />
                 </div>
             </div>
