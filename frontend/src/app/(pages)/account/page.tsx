@@ -8,6 +8,7 @@ import { LogOut, Check } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import { deleteAccount } from "@/app/lib/mikeApi";
+import { ThemeToggle } from "@/app/components/shared/ThemeToggle";
 
 export default function AccountPage() {
     const router = useRouter();
@@ -86,7 +87,7 @@ export default function AccountPage() {
                 </div>
                 <div className="space-y-4">
                     <div>
-                        <label className="text-sm text-gray-600 block mb-2">
+                        <label className="text-sm text-muted-foreground block mb-2">
                             Display Name
                         </label>
                         <div className="flex gap-2">
@@ -102,7 +103,7 @@ export default function AccountPage() {
                                 disabled={
                                     isSavingName || !displayName.trim() || saved
                                 }
-                                className="min-w-[80px] transition-all bg-black hover:bg-gray-900 text-white"
+                                className="min-w-[80px] transition-all bg-primary hover:bg-primary/90 text-primary-foreground"
                             >
                                 {isSavingName ? (
                                     "Saving..."
@@ -118,7 +119,7 @@ export default function AccountPage() {
                         </div>
                     </div>
                     <div>
-                        <label className="text-sm text-gray-600 block mb-2">
+                        <label className="text-sm text-muted-foreground block mb-2">
                             Organisation
                         </label>
                         <div className="flex gap-2">
@@ -139,7 +140,7 @@ export default function AccountPage() {
                                         (profile?.organisation ?? "") ||
                                     orgSaved
                                 }
-                                className="min-w-[80px] transition-all bg-black hover:bg-gray-900 text-white"
+                                className="min-w-[80px] transition-all bg-primary hover:bg-primary/90 text-primary-foreground"
                             >
                                 {isSavingOrg ? (
                                     "Saving..."
@@ -155,11 +156,30 @@ export default function AccountPage() {
                         </div>
                     </div>
                     <div>
-                        <label className="text-sm text-gray-600 block mb-2">
+                        <label className="text-sm text-muted-foreground block mb-2">
                             Email
                         </label>
                         <p className="text-base">{user?.email}</p>
                     </div>
+                </div>
+            </div>
+
+            {/* Appearance — feat-020 */}
+            <div className="py-6">
+                <div className="flex items-center gap-2 mb-4">
+                    <h2 className="text-2xl font-medium font-serif">
+                        Appearance
+                    </h2>
+                </div>
+                <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground block">
+                        Theme
+                    </label>
+                    <ThemeToggle />
+                    <p className="text-xs text-muted-foreground pt-1">
+                        System follows your OS preference. Choice is saved on
+                        this device.
+                    </p>
                 </div>
             </div>
 
@@ -171,7 +191,7 @@ export default function AccountPage() {
                     </h2>
                 </div>
                 <div>
-                    <p className="text-base font-medium text-gray-500 capitalize">
+                    <p className="text-base font-medium text-muted-foreground capitalize">
                         {profile?.tier || "Free"}
                     </p>
                 </div>
@@ -194,16 +214,16 @@ export default function AccountPage() {
 
             {/* Danger Zone */}
             <div className="py-6">
-                <h2 className="text-2xl font-medium font-serif mb-1 text-red-600">
+                <h2 className="text-2xl font-medium font-serif mb-1 text-destructive">
                     Danger Zone
                 </h2>
-                <p className="text-sm text-gray-500 mb-4">
+                <p className="text-sm text-muted-foreground mb-4">
                     Permanently delete your account and all associated data.
                     This action cannot be undone.
                 </p>
                 {deleteConfirm ? (
-                    <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-3 max-w-sm">
-                        <p className="text-sm font-medium text-red-700">
+                    <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 space-y-3 max-w-sm">
+                        <p className="text-sm font-medium text-destructive">
                             Are you sure? This will permanently delete your
                             account.
                         </p>
@@ -219,7 +239,7 @@ export default function AccountPage() {
                             <Button
                                 onClick={handleDeleteAccount}
                                 disabled={isDeleting}
-                                className="text-sm bg-red-600 hover:bg-red-700 text-white"
+                                className="text-sm bg-destructive hover:bg-destructive/90 text-white"
                             >
                                 {isDeleting ? "Deleting…" : "Delete Account"}
                             </Button>
@@ -229,7 +249,7 @@ export default function AccountPage() {
                     <Button
                         variant="outline"
                         onClick={() => setDeleteConfirm(true)}
-                        className="w-full sm:w-auto border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        className="w-full sm:w-auto border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
                     >
                         Delete Account
                     </Button>

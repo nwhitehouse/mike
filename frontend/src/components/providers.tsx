@@ -2,13 +2,16 @@
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import { UserProfileProvider } from "@/contexts/UserProfileContext";
+import { ThemeProvider } from "@/app/contexts/ThemeContext";
 
 export function Providers({ children }: { children: React.ReactNode }) {
     return (
-        <AuthProvider>
-            <UserProfileProvider>
-                {children}
-            </UserProfileProvider>
-        </AuthProvider>
+        <ThemeProvider>
+            <AuthProvider>
+                <UserProfileProvider>
+                    {children}
+                </UserProfileProvider>
+            </AuthProvider>
+        </ThemeProvider>
     );
 }

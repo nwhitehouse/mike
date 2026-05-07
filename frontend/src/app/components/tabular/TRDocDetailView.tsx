@@ -247,8 +247,8 @@ export function TRDocDetailView({
 
     if (!doc) {
         return (
-            <div className="flex h-full items-center justify-center bg-white">
-                <div className="text-sm text-gray-500">
+            <div className="flex h-full items-center justify-center bg-card">
+                <div className="text-sm text-muted-foreground">
                     Document not found.
                 </div>
             </div>
@@ -308,7 +308,7 @@ export function TRDocDetailView({
     const docPage = trimmedSearch ? undefined : activeCitation?.page;
 
     return (
-        <div className="flex h-full w-full flex-col bg-white overflow-hidden">
+        <div className="flex h-full w-full flex-col bg-card overflow-hidden">
             {/* Top bar */}
             {(() => {
                 const docIdx = documents.findIndex((d) => d.id === documentId);
@@ -319,21 +319,21 @@ export function TRDocDetailView({
                         ? documents[docIdx + 1]
                         : null;
                 return (
-                    <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 shrink-0">
+                    <div className="flex items-center gap-3 px-4 py-2 border-b border-border shrink-0">
                         <button
                             onClick={onBack}
-                            className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-100"
+                            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted"
                         >
                             <ArrowLeft className="h-4 w-4" />
                             Back
                         </button>
                         <span
-                            className="text-sm font-medium text-gray-800 truncate"
+                            className="text-sm font-medium text-foreground truncate"
                             title={doc.filename}
                         >
                             {doc.filename}
                         </span>
-                        <div className="ml-auto flex items-center gap-1 text-xs text-gray-500 shrink-0">
+                        <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground shrink-0">
                             <button
                                 onClick={() =>
                                     prevDoc && onChangeDocument(prevDoc.id)
@@ -344,7 +344,7 @@ export function TRDocDetailView({
                                         ? `Previous: ${prevDoc.filename}`
                                         : "No previous document"
                                 }
-                                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                                className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent"
                             >
                                 <ChevronLeft className="h-4 w-4" />
                             </button>
@@ -362,7 +362,7 @@ export function TRDocDetailView({
                                         ? `Next: ${nextDoc.filename}`
                                         : "No next document"
                                 }
-                                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                                className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent"
                             >
                                 <ChevronRight className="h-4 w-4" />
                             </button>
@@ -374,13 +374,13 @@ export function TRDocDetailView({
             {/* 3-pane body */}
             <div className="flex-1 flex overflow-hidden min-h-0">
                 {/* Pane 1 — Columns (25%) */}
-                <div className="w-1/4 shrink-0 border-r border-gray-200 flex flex-col min-w-0">
-                    <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 shrink-0">
-                        <span className="text-base font-medium text-gray-900">
+                <div className="w-1/4 shrink-0 border-r border-border flex flex-col min-w-0">
+                    <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+                        <span className="text-base font-medium text-foreground">
                             Columns
                         </span>
                         {sortedColumns.length > 0 && colPos >= 0 && (
-                            <span className="text-xs text-gray-400">
+                            <span className="text-xs text-muted-foreground/70">
                                 {colPos + 1}/{sortedColumns.length}
                             </span>
                         )}
@@ -392,10 +392,10 @@ export function TRDocDetailView({
                                 <button
                                     key={col.index}
                                     onClick={() => selectColumn(col.index)}
-                                    className={`w-full text-left px-4 py-2.5 text-sm border-b border-gray-100 truncate ${
+                                    className={`w-full text-left px-4 py-2.5 text-sm border-b border-border truncate ${
                                         isSel
-                                            ? "bg-gray-100 text-gray-900 font-medium"
-                                            : "text-gray-700 hover:bg-gray-50"
+                                            ? "bg-muted text-foreground font-medium"
+                                            : "text-foreground hover:bg-muted"
                                     }`}
                                     title={col.name}
                                 >
@@ -407,10 +407,10 @@ export function TRDocDetailView({
                 </div>
 
                 {/* Pane 2 — Cell value (25%) */}
-                <div className="w-1/4 shrink-0 border-r border-gray-200 flex flex-col overflow-hidden min-w-0">
-                    <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 shrink-0 gap-2">
+                <div className="w-1/4 shrink-0 border-r border-border flex flex-col overflow-hidden min-w-0">
+                    <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0 gap-2">
                         <span
-                            className="text-base font-medium text-gray-900 truncate"
+                            className="text-base font-medium text-foreground truncate"
                             title={selectedColumn?.name}
                         >
                             {selectedColumn?.name ?? "—"}
@@ -418,7 +418,7 @@ export function TRDocDetailView({
                         {!editing && selectedCell?.content && (
                             <button
                                 onClick={startEditing}
-                                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 shrink-0"
+                                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground shrink-0"
                                 title="Edit cell"
                             >
                                 <Pencil className="h-3 w-3" />
@@ -426,7 +426,7 @@ export function TRDocDetailView({
                             </button>
                         )}
                         {editing && (
-                            <span className="text-xs text-gray-400 italic shrink-0">
+                            <span className="text-xs text-muted-foreground/70 italic shrink-0">
                                 Editing…
                             </span>
                         )}
@@ -434,7 +434,7 @@ export function TRDocDetailView({
                     <div className="flex-1 overflow-auto px-4 py-4 space-y-4">
                         {/* Cell value */}
                         <div>
-                            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
                                 Cell Value
                             </p>
                             {editing ? (
@@ -444,10 +444,10 @@ export function TRDocDetailView({
                                         setDraftSummary(e.target.value)
                                     }
                                     rows={4}
-                                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm leading-relaxed text-gray-800 focus:border-gray-400 focus:outline-none resize-y"
+                                    className="w-full rounded-md border border-border px-3 py-2 text-sm leading-relaxed text-foreground focus:border-input focus:outline-none resize-y"
                                 />
                             ) : (
-                                <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-800 leading-relaxed">
+                                <div className="rounded-md border border-border bg-muted px-3 py-2.5 text-sm text-foreground leading-relaxed">
                                     {selectedColumn ? (
                                         <MarkdownContent
                                             citations={summaryCitations}
@@ -475,7 +475,7 @@ export function TRDocDetailView({
                         {/* Explanation */}
                         {(reasoning || editing) && selectedColumn && (
                             <div>
-                                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
                                     Explanation
                                 </p>
                                 {editing ? (
@@ -485,10 +485,10 @@ export function TRDocDetailView({
                                             setDraftReasoning(e.target.value)
                                         }
                                         rows={5}
-                                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm leading-relaxed text-gray-700 focus:border-gray-400 focus:outline-none resize-y"
+                                        className="w-full rounded-md border border-border px-3 py-2 text-sm leading-relaxed text-foreground focus:border-input focus:outline-none resize-y"
                                     />
                                 ) : (
-                                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700 leading-relaxed">
+                                    <div className="rounded-md border border-border bg-muted px-3 py-2.5 text-sm text-foreground leading-relaxed">
                                         <MarkdownContent
                                             citations={reasoningCitations}
                                             onCitationClick={(c) => {
@@ -523,7 +523,7 @@ export function TRDocDetailView({
                                 <button
                                     onClick={handleCancel}
                                     disabled={saving}
-                                    className="flex-1 px-3 py-2 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                                    className="flex-1 px-3 py-2 rounded-md border border-border text-sm text-foreground hover:bg-muted disabled:opacity-50"
                                 >
                                     Cancel
                                 </button>
@@ -541,22 +541,22 @@ export function TRDocDetailView({
 
                 {/* Pane 3 — Document preview (50%) */}
                 <div className="w-1/2 flex flex-col overflow-hidden min-w-0">
-                    <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 shrink-0">
+                    <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
                         {/* Search */}
                         <div className="relative w-64 shrink-0">
-                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/70 pointer-events-none" />
                             <input
                                 type="text"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 placeholder="Search in document"
-                                className="w-full pl-7 pr-7 py-1 text-xs rounded-md border border-gray-200 focus:border-gray-400 focus:outline-none"
+                                className="w-full pl-7 pr-7 py-1 text-xs rounded-md border border-border focus:border-input focus:outline-none"
                             />
                             {searchTerm && (
                                 <button
                                     type="button"
                                     onClick={() => setSearchTerm("")}
-                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-muted-foreground"
                                 >
                                     <X className="h-3 w-3" />
                                 </button>
@@ -564,7 +564,7 @@ export function TRDocDetailView({
                         </div>
 
                         {trimmedSearch ? (
-                            <div className="flex items-center gap-1 ml-2 text-xs text-gray-500 shrink-0">
+                            <div className="flex items-center gap-1 ml-2 text-xs text-muted-foreground shrink-0">
                                 <span className="mr-1">
                                     {matchCount === 0
                                         ? "No matches"
@@ -574,7 +574,7 @@ export function TRDocDetailView({
                                     onClick={handlePrevMatch}
                                     disabled={matchCount === 0}
                                     title="Previous match"
-                                    className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                                    className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent"
                                 >
                                     <ChevronLeft className="h-3.5 w-3.5" />
                                 </button>
@@ -582,20 +582,20 @@ export function TRDocDetailView({
                                     onClick={handleNextMatch}
                                     disabled={matchCount === 0}
                                     title="Next match"
-                                    className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                                    className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent"
                                 >
                                     <ChevronRight className="h-3.5 w-3.5" />
                                 </button>
                             </div>
                         ) : (
                             <>
-                                <span className="text-xs text-gray-500 ml-2 truncate">
+                                <span className="text-xs text-muted-foreground ml-2 truncate">
                                     {allCitations.length > 0
                                         ? `From ${allCitations.length} relevant reference${allCitations.length === 1 ? "" : "s"}`
                                         : "No references"}
                                 </span>
                                 {allCitations.length > 1 && (
-                                    <div className="flex items-center gap-1 ml-auto text-xs text-gray-500 shrink-0">
+                                    <div className="flex items-center gap-1 ml-auto text-xs text-muted-foreground shrink-0">
                                         <button
                                             onClick={() =>
                                                 setActiveCitationIdx((i) =>
@@ -603,7 +603,7 @@ export function TRDocDetailView({
                                                 )
                                             }
                                             disabled={activeCitationIdx === 0}
-                                            className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                                            className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent"
                                         >
                                             <ChevronLeft className="h-3.5 w-3.5" />
                                         </button>
@@ -624,7 +624,7 @@ export function TRDocDetailView({
                                                 activeCitationIdx ===
                                                 allCitations.length - 1
                                             }
-                                            className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                                            className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent"
                                         >
                                             <ChevronRight className="h-3.5 w-3.5" />
                                         </button>

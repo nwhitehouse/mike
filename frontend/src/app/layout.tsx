@@ -27,13 +27,41 @@ export const metadata: Metadata = {
     },
 };
 
+// feat-020 — Pre-hydration theme script. Runs before React mounts so the
+// first paint is on the correct theme. Reads localStorage('olava.theme'),
+// resolves 'system' against prefers-color-scheme, and toggles the .dark
+// class on <html>. Without this, dark-mode users see a flash of light
+// theme on load. Kept inline (not an import) so it runs immediately.
+const themeInitScript = `
+(function () {
+  try {
+    var stored = localStorage.getItem('olava.theme');
+    var mode = (stored === 'light' || stored === 'dark' || stored === 'system') ? stored : 'system';
+    var resolved = mode === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : mode;
+    var root = document.documentElement;
+    if (resolved === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+    root.style.colorScheme = resolved;
+  } catch (e) {
+    /* localStorage blocked; default to light */
+  }
+})();
+`;
+
 export default function RootLayout({
     children,
 }: Readonly<{
     children: React.ReactNode;
 }>) {
     return (
-        <html lang="en">
+        <html lang="en" suppressHydrationWarning>
+            <head>
+                <script
+                    dangerouslySetInnerHTML={{ __html: themeInitScript }}
+                />
+            </head>
             <body
                 className={`${inter.variable} ${ebGaramond.variable} font-sans antialiased`}
             >

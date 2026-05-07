@@ -465,15 +465,15 @@ export function ChatView({
                         {!messagesVisible && (
                             <div className="space-y-6 w-full">
                                 <div className="flex justify-end">
-                                    <div className="bg-gray-100 rounded-2xl p-4 w-2/5">
-                                        <div className="h-4 bg-gradient-to-r from-gray-200 via-gray-300 to-gray-200 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
+                                    <div className="bg-muted rounded-2xl p-4 w-2/5">
+                                        <div className="h-4 bg-gradient-to-r from-muted via-muted-foreground/20 to-muted bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
                                     </div>
                                 </div>
                                 <div className="space-y-3">
                                     {[1, 2, 3, 4].map((i) => (
                                         <div
                                             key={i}
-                                            className={`h-4 bg-gradient-to-r from-gray-200 via-gray-300 to-gray-200 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-5/6" : i === 4 ? "w-4/6" : "w-full"}`}
+                                            className={`h-4 bg-gradient-to-r from-muted via-muted-foreground/20 to-muted bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-5/6" : i === 4 ? "w-4/6" : "w-full"}`}
                                         />
                                     ))}
                                 </div>
@@ -590,9 +590,9 @@ export function ChatView({
                     >
                         <button
                             onClick={scrollToBottom}
-                            className="p-2 rounded-full bg-white/70 backdrop-blur-xs shadow-lg cursor-pointer border border-gray-300"
+                            className="p-2 rounded-full bg-card/70 backdrop-blur-xs shadow-lg cursor-pointer border border-border"
                         >
-                            <ArrowDown className="h-6 w-6 text-gray-500" />
+                            <ArrowDown className="h-6 w-6 text-muted-foreground" />
                         </button>
                     </div>
                 )}
@@ -603,14 +603,14 @@ export function ChatView({
                     className="absolute bottom-0 left-0 right-0 w-full z-30"
                 >
                     <div className="w-full max-w-4xl mx-auto px-4 md:px-6">
-                        <div className="w-full rounded-t-[20px] bg-white">
+                        <div className="w-full rounded-t-[20px] bg-card">
                             <ChatInput
                                 onSubmit={handleChat}
                                 onCancel={cancel}
                                 isLoading={isResponseLoading}
                             />
                             <div className="py-3 text-center">
-                                <p className="text-xs text-gray-500">
+                                <p className="text-xs text-muted-foreground">
                                     AI can make mistakes. Answers are not legal
                                     advice.
                                 </p>

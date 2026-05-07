@@ -44,24 +44,24 @@ export default function LoginPage() {
     };
 
     return (
-        <div className="min-h-dvh bg-white flex items-start justify-center px-6 pt-32 md:pt-40 pb-10 relative">
+        <div className="min-h-dvh bg-card flex items-start justify-center px-6 pt-32 md:pt-40 pb-10 relative">
             <div className="absolute top-4 md:top-8 left-1/2 -translate-x-1/2">
                 <SiteLogo size="md" className="md:text-4xl" asLink />
             </div>
             <div className="w-full max-w-md">
                 {/* Login Form */}
-                <div className="bg-white border border-gray-200 rounded-2xl p-8">
+                <div className="bg-card border border-border rounded-2xl p-8">
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-left text-2xl font-serif">
                             Log In
                         </h2>
-                        <div className="bg-gray-100 p-1 rounded-md flex text-xs font-medium">
-                            <span className="text-gray-600 px-3 py-1 bg-white rounded-sm shadow-sm">
+                        <div className="bg-muted p-1 rounded-md flex text-xs font-medium">
+                            <span className="text-muted-foreground px-3 py-1 bg-card rounded-sm shadow-sm">
                                 Log in
                             </span>
                             <Link
                                 href="/signup"
-                                className="px-3 py-1 text-gray-500 hover:text-gray-900"
+                                className="px-3 py-1 text-muted-foreground hover:text-foreground"
                             >
                                 Sign up
                             </Link>
@@ -71,7 +71,7 @@ export default function LoginPage() {
                         <div>
                             <label
                                 htmlFor="email"
-                                className="block text-sm font-medium text-gray-700 mb-2"
+                                className="block text-sm font-medium text-foreground mb-2"
                             >
                                 Email
                             </label>
@@ -89,7 +89,7 @@ export default function LoginPage() {
                         <div>
                             <label
                                 htmlFor="password"
-                                className="block text-sm font-medium text-gray-700 mb-2"
+                                className="block text-sm font-medium text-foreground mb-2"
                             >
                                 Password
                             </label>
@@ -113,7 +113,7 @@ export default function LoginPage() {
                         <Button
                             type="submit"
                             disabled={loading}
-                            className="w-full mt-5 bg-black hover:bg-gray-900 text-white"
+                            className="w-full mt-5 bg-primary hover:bg-foreground text-primary-foreground"
                         >
                             {loading ? "Logging in..." : "Log in"}
                         </Button>

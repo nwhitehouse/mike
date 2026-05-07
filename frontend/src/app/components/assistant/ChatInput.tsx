@@ -184,7 +184,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     return (
         <>
             <div className="w-full">
-                <div className="border border-gray-300 rounded-[16px] md:rounded-[20px] bg-white">
+                <div className="border border-border rounded-[16px] md:rounded-[20px] bg-card">
                     {/* Attached chips */}
                     {(selectedWorkflow || attachedDocs.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
@@ -199,7 +199,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                         onClick={() =>
                                             setSelectedWorkflow(null)
                                         }
-                                        className="rounded-full p-0.5 ml-0.5 text-white/60 hover:text-white hover:bg-white/20 transition-colors"
+                                        className="rounded-full p-0.5 ml-0.5 text-primary-foreground/60 hover:text-primary-foreground hover:bg-card/20 transition-colors"
                                     >
                                         <X className="h-2.5 w-2.5" />
                                     </button>
@@ -220,7 +220,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                 return (
                                     <div
                                         key={doc.id}
-                                        className={`relative overflow-hidden inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs text-white shadow border border-white/20 bg-black backdrop-blur-sm ${shimmerOverlay}`}
+                                        className={`relative overflow-hidden inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs text-primary-foreground shadow border border-white/20 bg-primary backdrop-blur-sm ${shimmerOverlay}`}
                                         title={
                                             pending
                                                 ? "Reading document — chat will be ready in a moment…"
@@ -244,7 +244,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                                     ),
                                                 )
                                             }
-                                            className="rounded-full p-0.5 ml-0.5 text-white/60 hover:text-white hover:bg-white/20 transition-colors relative z-10"
+                                            className="rounded-full p-0.5 ml-0.5 text-primary-foreground/60 hover:text-primary-foreground hover:bg-card/20 transition-colors relative z-10"
                                         >
                                             <X className="h-2.5 w-2.5" />
                                         </button>
@@ -263,7 +263,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             value={value}
                             onChange={handleChange}
                             onKeyDown={handleKeyDown}
-                            className="w-full resize-none text-sm overflow-hidden border-0 text-base p-0 bg-transparent outline-none placeholder:text-gray-400 leading-6 max-h-48"
+                            className="w-full resize-none text-sm overflow-hidden border-0 text-base p-0 bg-transparent outline-none placeholder:text-muted-foreground/70 leading-6 max-h-48"
                         />
                     </div>
 
@@ -286,7 +286,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                     type="button"
                                     onClick={onProjectsClick}
                                     aria-label="Open projects"
-                                    className="flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                    className="flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm text-muted-foreground/70 hover:bg-muted hover:text-foreground transition-colors"
                                 >
                                     <FolderOpen className="h-3.5 w-3.5" />
                                     <span className="hidden sm:inline">
@@ -299,7 +299,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                     type="button"
                                     onClick={() => setWorkflowModalOpen(true)}
                                     aria-label="Open workflows"
-                                    className={`flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm transition-colors ${selectedWorkflow ? "text-blue-600 hover:bg-blue-50" : "text-gray-400 hover:bg-gray-100 hover:text-gray-700"}`}
+                                    className={`flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm transition-colors ${selectedWorkflow ? "text-blue-600 hover:bg-blue-50" : "text-muted-foreground/70 hover:bg-muted hover:text-foreground"}`}
                                 >
                                     {selectedWorkflow ? (
                                         <Check className="h-3.5 w-3.5" />
@@ -322,7 +322,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                 className={`flex items-center justify-center h-8 w-8 rounded-lg transition-colors cursor-pointer ${
                                     webSearchEnabled
                                         ? "text-blue-600 bg-blue-50 hover:bg-blue-100"
-                                        : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+                                        : "text-muted-foreground/70 hover:text-foreground hover:bg-muted"
                                 }`}
                             >
                                 <Globe className="h-4 w-4" />
@@ -334,7 +334,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             />
                             <button
                                 type="button"
-                                className="relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[10px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border border-white/30 active:enabled:scale-95 transition-all duration-150"
+                                className="relative bg-gradient-to-b from-neutral-700 to-black text-primary-foreground rounded-[10px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border border-white/30 active:enabled:scale-95 transition-all duration-150"
                                 onClick={handleActionClick}
                                 disabled={
                                     !isLoading &&

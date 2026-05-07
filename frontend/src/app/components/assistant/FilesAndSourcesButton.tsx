@@ -86,9 +86,9 @@ export function FilesAndSourcesButton({
                     <button
                         className={`flex items-center gap-1 px-2 h-8 rounded-lg text-sm transition-colors cursor-pointer ${
                             hasSelection
-                                ? "text-black hover:bg-gray-100"
-                                : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
-                        } ${isOpen ? "bg-gray-100" : ""}`}
+                                ? "text-foreground hover:bg-muted"
+                                : "text-muted-foreground/70 hover:text-foreground hover:bg-muted"
+                        } ${isOpen ? "bg-muted" : ""}`}
                         title="Files and sources"
                         aria-label="Files and sources"
                     >
@@ -116,9 +116,9 @@ export function FilesAndSourcesButton({
                         }}
                     >
                         {uploading ? (
-                            <Loader2Icon className="h-4 w-4 mr-2 animate-spin text-gray-400" />
+                            <Loader2Icon className="h-4 w-4 mr-2 animate-spin text-muted-foreground/70" />
                         ) : (
-                            <Upload className="h-4 w-4 mr-2 text-gray-500" />
+                            <Upload className="h-4 w-4 mr-2 text-muted-foreground" />
                         )}
                         <span className="text-sm">
                             {uploading ? "Uploading…" : "Upload files"}
@@ -128,14 +128,14 @@ export function FilesAndSourcesButton({
                         className="cursor-pointer"
                         onClick={onBrowseAll}
                     >
-                        <LayoutGridIcon className="h-4 w-4 mr-2 text-gray-500" />
+                        <LayoutGridIcon className="h-4 w-4 mr-2 text-muted-foreground" />
                         <span className="text-sm">Browse all</span>
                     </DropdownMenuItem>
 
                     {onLegalSourcesChange && (
                         <>
                             <DropdownMenuSeparator />
-                            <DropdownMenuLabel className="text-xs text-gray-500 font-normal uppercase tracking-wide">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground font-normal uppercase tracking-wide">
                                 US Legal Sources
                             </DropdownMenuLabel>
                             {LEGAL_SOURCE_OPTIONS.map((src) => (

@@ -27,7 +27,7 @@ export default function ModelsAndApiKeysPage() {
                 </div>
                 <div className="space-y-4 max-w-md">
                     <div>
-                        <label className="text-sm text-gray-600 block mb-2">
+                        <label className="text-sm text-muted-foreground block mb-2">
                             Tabular review model
                         </label>
                         <TabularModelDropdown
@@ -66,18 +66,18 @@ function TabularModelDropdown({
             <DropdownMenuTrigger asChild>
                 <button
                     type="button"
-                    className="w-full h-9 rounded-md border border-gray-300 bg-white px-3 text-sm shadow-sm flex items-center justify-between gap-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-black/10"
+                    className="w-full h-9 rounded-md border border-border bg-card px-3 text-sm shadow-sm flex items-center justify-between gap-2 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-black/10"
                 >
                     <span className="flex items-center gap-2 min-w-0">
                         {!selectedAvailable && (
                             <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
                         )}
-                        <span className="truncate text-gray-900">
+                        <span className="truncate text-foreground">
                             {selected?.label ?? "Select a model"}
                         </span>
                     </span>
                     <ChevronDown
-                        className={`h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+                        className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
                     />
                 </button>
             </DropdownMenuTrigger>
@@ -86,7 +86,7 @@ function TabularModelDropdown({
                 style={{ width: "var(--radix-dropdown-menu-trigger-width)" }}
                 align="start"
             >
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-gray-400">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
                     Olava
                 </DropdownMenuLabel>
                 {MODELS.map((m) => {
@@ -103,7 +103,7 @@ function TabularModelDropdown({
                             }
                         >
                             <span
-                                className={`flex-1 ${available ? "" : "text-gray-400"}`}
+                                className={`flex-1 ${available ? "" : "text-muted-foreground/70"}`}
                             >
                                 {m.label}
                             </span>
@@ -111,7 +111,7 @@ function TabularModelDropdown({
                                 <AlertCircle className="h-3.5 w-3.5 text-red-500 ml-1" />
                             )}
                             {m.id === value && available && (
-                                <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />
+                                <Check className="h-3.5 w-3.5 text-muted-foreground ml-1" />
                             )}
                         </DropdownMenuItem>
                     );

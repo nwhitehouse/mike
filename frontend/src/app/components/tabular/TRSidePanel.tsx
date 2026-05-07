@@ -47,7 +47,7 @@ interface Props {
 
 const FLAG_BADGE: Record<string, string> = {
     green: "bg-emerald-600 backdrop-blur-md border border-emerald-300/20 text-white shadow-md",
-    grey: "bg-slate-500 backdrop-blur-md border border-slate-300/20 text-white shadow-md",
+    grey: "bg-slate-500 backdrop-blur-md border border-slate-300/20 text-primary-foreground shadow-md",
     yellow: "bg-amber-500 backdrop-blur-md border border-amber-300/20 text-white shadow-md",
     red: "bg-red-600 backdrop-blur-md border border-red-300/20 text-white shadow-md",
 };
@@ -116,7 +116,7 @@ export function TRSidePanel({
 
     return (
         <div
-            className="fixed right-0 top-0 bottom-0 z-100 flex flex-row shadow-md border-l border-gray-200"
+            className="fixed right-0 top-0 bottom-0 z-100 flex flex-row shadow-md border-l border-border"
             style={{
                 background: "rgba(255,255,255,0.08)",
                 backdropFilter: "blur(10px) saturate(50%)",
@@ -136,7 +136,7 @@ export function TRSidePanel({
                         </p>
                         <button
                             onClick={() => setDocCitation(undefined)}
-                            className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/40 hover:text-slate-600"
+                            className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-card/40 hover:text-slate-600"
                         >
                             <X className="h-4 w-4" />
                         </button>
@@ -144,7 +144,7 @@ export function TRSidePanel({
                     {/* Quote row */}
                     {docCitation.quote && (
                         <div className="py-2 shrink-0">
-                            <div className="w-full rounded-md bg-gray-50 border border-gray-200 px-2 py-2">
+                            <div className="w-full rounded-md bg-muted border border-border px-2 py-2">
                                 <button
                                     onClick={() =>
                                         isTruncated || quoteExpanded
@@ -155,13 +155,13 @@ export function TRSidePanel({
                                 >
                                     <p
                                         ref={quoteParagraphRef}
-                                        className={`flex-1 text-sm text-gray-600 ${quoteExpanded ? "" : "truncate"}`}
+                                        className={`flex-1 text-sm text-muted-foreground ${quoteExpanded ? "" : "truncate"}`}
                                     >
                                         "{docCitation.quote}"
                                     </p>
                                     {(isTruncated || quoteExpanded) && (
                                         <ChevronDown
-                                            className={`mt-0.5 h-3 w-3 shrink-0 text-gray-500 transition-transform ${quoteExpanded ? "rotate-180" : ""}`}
+                                            className={`mt-0.5 h-3 w-3 shrink-0 text-muted-foreground transition-transform ${quoteExpanded ? "rotate-180" : ""}`}
                                         />
                                     )}
                                 </button>
@@ -337,7 +337,7 @@ export function CitationBadge({
             onClick={() =>
                 onClick({ quote: citation.quote, page: citation.page })
             }
-            className="inline-flex items-center justify-center rounded-full bg-gray-200 w-3.5 h-3.5 text-[9px] font-medium text-gray-700 align-super cursor-pointer hover:bg-gray-300 transition-colors"
+            className="inline-flex items-center justify-center rounded-full bg-secondary w-3.5 h-3.5 text-[9px] font-medium text-foreground align-super cursor-pointer hover:bg-muted-foreground/30 transition-colors"
         >
             {index + 1}
         </button>
@@ -448,7 +448,7 @@ export function MarkdownContent({
                     }
                     return (
                         <code
-                            className="bg-gray-100 px-1 py-0.5 rounded text-[11px] font-mono"
+                            className="bg-muted px-1 py-0.5 rounded text-[11px] font-mono"
                             {...props}
                         >
                             {codeChildren}
