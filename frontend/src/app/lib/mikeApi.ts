@@ -22,7 +22,9 @@ import type {
 interface ServerMessage {
     id: string;
     chat_id: string;
-    role: "user" | "assistant";
+    // feat-017: chat_messages now also stores role="tool" rows (tool
+    // results from prior turns, replayed to the LLM by the backend).
+    role: "user" | "assistant" | "tool";
     content: string | AssistantEvent[] | null;
     files?: { filename: string; document_id?: string }[] | null;
     workflow?: { id: string; title: string } | null;
@@ -378,6 +380,18 @@ export async function getChat(chatId: string): Promise<MikeChatDetailOut> {
                 content: typeof m.content === "string" ? m.content : "",
                 files: m.files ?? undefined,
                 workflow: m.workflow ?? undefined,
+            };
+        }
+        // feat-017: tool result rows are persisted to chat_messages so the
+        // LLM can replay them next turn, but they aren't user-facing — the
+        // tool *activity* (which document was read, etc.) renders from the
+        // assistant message's events[]. Preserve role='tool' so ChatView's
+        // filter hides them; without this they'd be coerced to empty
+        // assistant bubbles that crowd out the real tool cards.
+        if (m.role === "tool") {
+            return {
+                role: "tool",
+                content: typeof m.content === "string" ? m.content : "",
             };
         }
         const events = Array.isArray(m.content)
