@@ -397,3 +397,92 @@ c) **DocView `quoteKey` fix + custom hover popover** (frontend, separable from a
 - No regression in tool-using turns or research-mode synthesis.
 
 **Why deferred.** Model behaviour change + viewer-scroll race + popover UI is three separable concerns that deserve their own sprint thread; rolling them into the feat-005 commit would muddle review.
+
+**Outcome (2026-05-04).** Tried; reverted. The `add_citation` tool was added to the schema and the system prompt rewritten to instruct calling it per `[N]` marker. Empirically Olava skipped the tool ~always — it wrote `[N]` markers but never invoked `add_citation`. Same SLM-prompt-following gap as before, just shifted from "didn't follow JSON format" to "didn't call the tool." See commit `8731d95 [feat-006] Park add_citation tool path; restore <CITATIONS> JSON prompt`. Tool definition + dispatch remain in code so re-engaging is just a prompt swap. Frontend pieces (hover popover via `CitationPill`, same-doc rescroll fix in `ChatView.upsertTab`) **did ship in `6321e28`** and are still live — they're not coupled to the prompt path.
+
+---
+
+## Sprint 2: Vision mode (started 2026-05-04, ongoing)
+
+Goal: stop relying on `read_document` text extraction as the primary doc-context channel. Send PDFs as images to Olava-001's Qwen3-VL backbone so it reasons over visual layout (tables, signatures, headers) — and incidentally fits more pages per request via grid composition.
+
+Sequenced because each piece compounds: 007a established the pipeline, 008 fixed the silent rendering bug + introduced 4-up compression, 009 layered cache + perf, 010 closed the user-perceived first-chat latency gap.
+
+### feat-007a Vision-mode auto-on for PDFs
+**Status:** done
+**Commits:** `f870b0a` (initial), `436d028` (live citation rendering)
+
+Auto-enable when any chat has an attached PDF. Backend renders pages → spliced into the last user message as `image_url` content blocks. New system-prompt hint tells the model to read directly from images instead of waiting for `read_document`.
+
+Includes the per-marker citation verifier (`lib/research/citationVerifier.ts`) that watches `iterText` for newly-arriving `[N]` / `¹²³⁴` markers and fires parallel non-streaming Olava calls to derive page+quote. Streams `citation_added` SSE events live; frontend rAF-batches them to avoid render storms.
+
+**Open issue (2026-05-06):** verifier is now the dominant chat-finish wait. Per-call latency 12–17s; we await all in-flight at end-of-turn before sending `[DONE]`. Backend log on a representative SEK chat: 4 calls, 3 misses, 12.5s wait. Two ways forward queued (see "Open items" below).
+
+### feat-008 PDF rendering via pdftoppm + 4-up
+**Status:** done
+**Commits:** `787258c` (pdftoppm + 4-up), `26ef15f` (verifier model-name bug)
+
+Two outcomes in one commit:
+1. **Fixed silent blank-page bug.** Production was rendering blank PNGs because canvas v3 dropped `Path2D` and pdfjs 4.x uses Path2D for glyph paths. The `path2d` polyfill didn't bridge it. Vision-mode answers were entirely from `read_document` text-fallback up until this fix; vision input was noise. Now shells out to `pdftoppm` (poppler-utils, added to `nixpacks.toml`).
+2. **4-up grid as default.** Two spike rounds (25-page services agreement + 75-page SEK financing doc, see `backend/scripts/spike_compression.ts`) confirmed ~3× token compression vs 1-up at no fidelity loss on factual queries (dates, currency amounts, party names). 8-up was rejected — it hallucinates.
+
+`26ef15f` separately fixes the verifier hardcoding `olava-001` (vLLM serves `olava-extract`).
+
+### feat-009 Vision perf: parallel render + tiered cache + progress UI
+**Status:** done
+**Commit:** `6bf6d52`
+
+Four wins for chat-time vision wait:
+1. **Progress UI.** SSE stream opens BEFORE pdftoppm runs so a `vision_render_start` placeholder reaches the browser immediately. `VisionRenderBlock` matches the `DocReadBlock` pattern.
+2. **Parallel render.** 4 pdftoppm workers split via `-f`/`-l` page ranges. 75 pages went from 28s → 11.7s on bench.
+3. **In-memory LRU cache** (`lib/visionCache.ts`). 5-entry cap (~30MB per 75-page doc, ≤150MB worst case on 512MB Railway).
+4. **R2 persistent cache** (`lib/visionR2Cache.ts`). Single JSON manifest at `vision-cache/<base64url>.json`. Survives restarts and redeploys. Write-through on render.
+
+Tiered lookup in `visionContext.ts`: memory → R2 → live render.
+
+### feat-010 Pre-render at upload + chip shimmer
+**Status:** done
+**Commit:** `b284014`
+
+Closes the "first chat against a freshly-uploaded doc is slow" gap. Upload route fires `kickOffVisionPrerender` (fire-and-forget) the moment a PDF version row inserts. By the time the user opens a chat, R2 cache is warm.
+
+Frontend: new `useVisionStatus` hook polls `GET /single-documents/:id/vision-status` per attached PDF. While status is `pending`, the chip in `ChatInput` shimmers (`chip-shimmer` keyframe in `globals.css`) and the Send button is disabled (with `title=` explanation). Belt-and-braces in `handleSubmit` so Enter doesn't sneak past.
+
+Status endpoint combines in-memory render-tracker map with R2 manifest existence — survives backend restarts.
+
+### Bonus shipped this sprint
+- `e67b072` + `4f480f2` — user-message attachment chips are now clickable; opens the doc in the side panel viewer. Wired on both standalone-assistant and project-chat routes.
+
+---
+
+## Open items (queued for next session)
+
+### bug-005 Verifier blocks [DONE] for ~12s after model finishes
+**Status:** ready, well-scoped
+**Priority:** High — biggest user-perceived latency now
+
+Per-marker verifier in `lib/research/citationVerifier.ts` is awaited at end-of-turn (`chatTools.ts:3009+`). Verifier calls take 12–17s each, and we wait for all in-flight before emitting `[DONE]`. The model's `<CITATIONS>` block already produces all pills via the existing parser — verifier results are duplicate work most of the time, and 3-of-4 come back empty in practice.
+
+**Two options:**
+- (A) Stop awaiting verifiers at end-of-turn. Cuts ~12s. Citations from `<CITATIONS>` block path land via existing flow; in-flight verifier results that didn't finish before `[DONE]` are lost.
+- (B) Disable verifier entirely. Same speed win; even simpler. Re-enable selectively if/when we observe `<CITATIONS>` block skips again.
+
+User leans (B). 1-line change.
+
+### feat-011 vLLM prefix caching
+**Status:** ready (vLLM-side flag flip)
+**Priority:** Medium — second-biggest first-token latency
+
+vLLM has `--enable-prefix-caching` which caches KV across requests with shared prompt prefixes. With our system prompt + image content as the prefix, second chat against the same doc would skip vision encoding entirely. ~5–15s savings on repeat chats. No backend code change.
+
+### feat-012 Text-as-image compression for chat history / tool results
+**Status:** spike done, decision deferred
+**Priority:** Low
+
+Inspired by the EMNLP 2025 paper (`Text or Pixels? It Takes Half`). Spike (`backend/scripts/spike_compression.ts`) showed `text-img-6pt` gets ~0.42× tokens vs raw text on legal docs with mostly-preserved fidelity, but is inconsistent on factual queries. Worth revisiting if we hit context-window pressure on long chat histories or tool result blobs (search results, doc text). Don't ship for PDF context — `pdf-4up` (feat-008) is the answer there.
+
+### feat-006 Reliable document citations via tool-calling
+**Status:** parked (see Outcome note above)
+**Priority:** Defer — current `<CITATIONS>` JSON path works in practice
+
+Re-engage if we see citation reliability drop again. Tool definition + dispatch remain in `chatTools.ts`; just need to flip the system prompt back to the `add_citation`-instructive variant.

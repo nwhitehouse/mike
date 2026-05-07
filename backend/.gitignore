@@ -4,3 +4,9 @@ dist
 !.env.example
 *.log
 .DS_Store
+
+# Local benchmark outputs from scripts/spike_compression.ts. Each run
+# writes ~70 paired markdown reports under spike-out/text-compression*.
+# Findings are summarised in backlog.md (Sprint 2); raw output is
+# regenerable on demand and not worth versioning.
+spike-out/
