@@ -17,6 +17,7 @@ import { HeaderSearchBtn } from "../shared/HeaderSearchBtn";
 import {
     cancelTabularJob,
     clearTabularCells,
+    deleteTabularColumn,
     getActiveTabularJob,
     getProject,
     getTabularJob,
@@ -24,6 +25,7 @@ import {
     getTabularReview,
     getTabularReviewPeople,
     regenerateTabularCell,
+    reprocessTabularColumn,
     startTabularGenerate,
     updateTabularReview,
     type TabularJobStatus,
@@ -77,6 +79,41 @@ export function TRView({ reviewId, projectId }: Props) {
     const [jobStatus, setJobStatus] = useState<TabularJobStatus | null>(null);
     const activeJobIdRef = useRef<string | null>(null);
     const pollAbortRef = useRef<{ cancelled: boolean } | null>(null);
+
+    // feat-021 — hidden column indices, persisted per-(review, device) in
+    // localStorage. Restored on mount; updated as the user hides/shows.
+    const hiddenColumnsKey = `olava.tabular.hiddenColumns.${reviewId}`;
+    const [hiddenColumnIndices, setHiddenColumnIndices] = useState<number[]>(
+        [],
+    );
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(hiddenColumnsKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.every((n) => typeof n === "number")) {
+                setHiddenColumnIndices(parsed);
+            }
+        } catch {
+            /* malformed — start fresh */
+        }
+    }, [hiddenColumnsKey]);
+    function persistHiddenColumns(next: number[]) {
+        setHiddenColumnIndices(next);
+        try {
+            window.localStorage.setItem(hiddenColumnsKey, JSON.stringify(next));
+        } catch {
+            /* private browsing etc. — state still updates in memory */
+        }
+    }
+    const visibleColumns = columns.filter(
+        (c) => !hiddenColumnIndices.includes(c.index),
+    );
+
+    // feat-021 — confirmation modal for column delete (destructive).
+    const [columnPendingDelete, setColumnPendingDelete] =
+        useState<ColumnConfig | null>(null);
+    const [deletingColumn, setDeletingColumn] = useState(false);
     const [savingColumn, setSavingColumn] = useState(false);
     const [savingColumnsConfig, setSavingColumnsConfig] = useState(false);
     const [addColOpen, setAddColOpen] = useState(false);
@@ -489,7 +526,10 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    async function handleUpdateColumn(nextColumn: ColumnConfig) {
+    async function handleUpdateColumn(
+        nextColumn: ColumnConfig,
+        options?: { reprocess?: boolean },
+    ) {
         const nextColumns = columns.map((column) =>
             column.index === nextColumn.index ? nextColumn : column,
         );
@@ -497,23 +537,85 @@ export function TRView({ reviewId, projectId }: Props) {
         setColumns(nextColumns);
         try {
             await saveColumnsConfig(nextColumns);
+            if (options?.reprocess) {
+                await handleReprocessColumn(nextColumn.index);
+            }
         } catch (err) {
             setColumns(previousColumns);
             console.error("Failed to update column", err);
         }
     }
 
-    async function handleDeleteColumn(columnIndex: number) {
+    // feat-021 — open the confirm modal; actual delete happens in
+    // confirmDeleteColumn after the user explicitly confirms.
+    function handleDeleteColumn(columnIndex: number) {
+        const target = columns.find((c) => c.index === columnIndex);
+        if (!target) return;
+        setColumnPendingDelete(target);
+    }
+
+    async function confirmDeleteColumn() {
+        if (!columnPendingDelete) return;
         const previousColumns = columns;
-        const nextColumns = columns.filter(
-            (column) => column.index !== columnIndex,
-        );
-        setColumns(nextColumns);
+        const previousCells = cells;
+        const targetIndex = columnPendingDelete.index;
+        // Optimistic: remove the column + its cells locally.
+        setColumns(columns.filter((c) => c.index !== targetIndex));
+        setCells(cells.filter((c) => c.column_index !== targetIndex));
+        setDeletingColumn(true);
         try {
-            await saveColumnsConfig(nextColumns);
+            const { columns_config } = await deleteTabularColumn(
+                reviewId,
+                targetIndex,
+            );
+            // Trust server's columns_config as canonical.
+            setColumns(columns_config);
+            setColumnPendingDelete(null);
         } catch (err) {
-            setColumns(previousColumns);
             console.error("Failed to delete column", err);
+            setColumns(previousColumns);
+            setCells(previousCells);
+            alert("Failed to delete column. Please try again.");
+        } finally {
+            setDeletingColumn(false);
+        }
+    }
+
+    // feat-021 — hide column (localStorage-persisted, no server change).
+    function handleHideColumn(columnIndex: number) {
+        if (hiddenColumnIndices.includes(columnIndex)) return;
+        persistHiddenColumns([...hiddenColumnIndices, columnIndex]);
+    }
+    function handleShowAllColumns() {
+        persistHiddenColumns([]);
+    }
+
+    // feat-021 — reprocess one column. Server wipes its cells and starts
+    // a job; we then run our normal poller so the run-button shows progress.
+    async function handleReprocessColumn(columnIndex: number) {
+        if (generating) return;
+        setGenerating(true);
+        // Optimistic: flip just this column's cells to generating so the
+        // user gets immediate visual feedback.
+        setCells((prev) =>
+            prev.map((c) =>
+                c.column_index === columnIndex
+                    ? { ...c, status: "generating" as const, content: null }
+                    : c,
+            ),
+        );
+        try {
+            const { jobId } = await reprocessTabularColumn(
+                reviewId,
+                columnIndex,
+            );
+            await pollJob(jobId);
+        } catch (err) {
+            console.error("Reprocess failed", err);
+            setGenerating(false);
+            alert(
+                "Couldn't start reprocess — another run may already be in progress.",
+            );
         }
     }
 
@@ -770,6 +872,17 @@ export function TRView({ reviewId, projectId }: Props) {
                         <WrapText className="h-3.5 w-3.5" />
                         {wrapText ? "Unwrap text" : "Wrap text"}
                     </button>
+                    {/* feat-021 — show how many columns are hidden, with a
+                        one-click restore. Hidden via the column 3-dot menu. */}
+                    {hiddenColumnIndices.length > 0 && (
+                        <button
+                            onClick={handleShowAllColumns}
+                            className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                            title="Show all hidden columns"
+                        >
+                            {hiddenColumnIndices.length} hidden — Show all
+                        </button>
+                    )}
                     <div className="ml-auto flex items-center gap-4">
                         {selectedDocIds.length > 0 && (
                             <div ref={actionsRef} className="relative">
@@ -848,7 +961,7 @@ export function TRView({ reviewId, projectId }: Props) {
                     <TRTable
                         ref={tableRef}
                         loading={loading}
-                        columns={columns}
+                        columns={visibleColumns}
                         documents={filteredDocuments}
                         cells={cells}
                         highlightedCell={highlightedCell}
@@ -875,6 +988,8 @@ export function TRView({ reviewId, projectId }: Props) {
                         onAddDocuments={() => setAddDocsOpen(true)}
                         onDocumentClick={(docId) => setDocDetailDocId(docId)}
                         wrapText={wrapText}
+                        onHideColumn={handleHideColumn}
+                        onReprocessColumn={handleReprocessColumn}
                     />
                 </div>
             </div>
@@ -1010,6 +1125,69 @@ export function TRView({ reviewId, projectId }: Props) {
                 provider={apiKeyModalProvider}
                 onClose={() => setApiKeyModalProvider(null)}
             />
+
+            {/* feat-021 — confirm-delete-column. Inline because the modal is
+                tiny and only used here. Counts cells that will be deleted so
+                the user knows the blast radius. */}
+            {columnPendingDelete && (
+                <div
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/40"
+                    onClick={() =>
+                        !deletingColumn && setColumnPendingDelete(null)
+                    }
+                >
+                    <div
+                        className="w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-base font-medium text-foreground mb-2">
+                            Delete column?
+                        </h3>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            <span className="text-foreground font-medium">
+                                {columnPendingDelete.name}
+                            </span>{" "}
+                            and{" "}
+                            {
+                                cells.filter(
+                                    (c) =>
+                                        c.column_index ===
+                                        columnPendingDelete.index,
+                                ).length
+                            }{" "}
+                            cell
+                            {cells.filter(
+                                (c) =>
+                                    c.column_index ===
+                                    columnPendingDelete.index,
+                            ).length === 1
+                                ? ""
+                                : "s"}{" "}
+                            will be permanently deleted. This cannot be undone.
+                        </p>
+                        <div className="flex items-center justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setColumnPendingDelete(null)}
+                                disabled={deletingColumn}
+                                className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={confirmDeleteColumn}
+                                disabled={deletingColumn}
+                                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+                            >
+                                {deletingColumn
+                                    ? "Deleting…"
+                                    : "Delete column"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -41,12 +41,16 @@ interface Props {
     onSelectionChange: (ids: string[]) => void;
     onExpand: (cell: TabularCell) => void;
     onCitationClick: (cell: TabularCell, page: number, quote: string) => void;
-    onUpdateColumn: (col: ColumnConfig) => void;
+    onUpdateColumn: (col: ColumnConfig, options?: { reprocess?: boolean }) => void;
     onDeleteColumn: (colIndex: number) => void;
     onReorderColumns?: (newColumns: ColumnConfig[]) => void;
     onAddColumn: () => void;
     onAddDocuments: () => void;
     onDocumentClick?: (docId: string) => void;
+    /** feat-021 — hide a column from the visible set (localStorage-persisted). */
+    onHideColumn?: (colIndex: number) => void;
+    /** feat-021 — re-run only this column's cells via the worker pool. */
+    onReprocessColumn?: (colIndex: number) => void | Promise<void>;
 }
 
 export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
@@ -69,6 +73,8 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         onAddColumn,
         onAddDocuments,
         onDocumentClick,
+        onHideColumn,
+        onReprocessColumn,
     },
     ref,
 ) {
@@ -378,6 +384,8 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                     }
                                     onSave={onUpdateColumn}
                                     onDelete={onDeleteColumn}
+                                    onHide={onHideColumn}
+                                    onReprocess={onReprocessColumn}
                                 />
                             </div>
                             {/* Right-edge resize handle. Sits on top of the

@@ -706,6 +706,43 @@ export async function streamTabularChat(
     });
 }
 
+// feat-021 — column management.
+
+export type ReprocessTabularColumnResponse = {
+    jobId: string;
+    totalItems: number;
+    columnIndex: number;
+};
+
+export async function reprocessTabularColumn(
+    reviewId: string,
+    columnIndex: number,
+): Promise<ReprocessTabularColumnResponse> {
+    return apiRequest<ReprocessTabularColumnResponse>(
+        `/tabular-review/${reviewId}/reprocess-column`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ columnIndex }),
+        },
+    );
+}
+
+export type DeleteTabularColumnResponse = {
+    ok: true;
+    columns_config: import("@/app/components/shared/types").ColumnConfig[];
+};
+
+export async function deleteTabularColumn(
+    reviewId: string,
+    columnIndex: number,
+): Promise<DeleteTabularColumnResponse> {
+    return apiRequest<DeleteTabularColumnResponse>(
+        `/tabular-review/${reviewId}/columns/${columnIndex}`,
+        { method: "DELETE" },
+    );
+}
+
 export interface TRCitationAnnotation {
     type: "tabular_citation";
     ref: number;

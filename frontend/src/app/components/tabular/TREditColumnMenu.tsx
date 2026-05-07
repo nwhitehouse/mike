@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Loader2, MoreHorizontal, Plus, Trash2, X } from "lucide-react";
+import {
+    ChevronDown,
+    EyeOff,
+    Loader2,
+    MoreHorizontal,
+    Plus,
+    RefreshCw,
+    Trash2,
+    X,
+} from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
 import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
 import { FORMAT_OPTIONS, formatLabel, formatIcon } from "./columnFormat";
@@ -17,8 +26,13 @@ import {
 export interface TREditColumnMenuProps {
     column: ColumnConfig;
     disabled?: boolean;
-    onSave: (column: ColumnConfig) => void | Promise<void>;
+    onSave: (column: ColumnConfig, options?: { reprocess?: boolean }) => void | Promise<void>;
     onDelete: (columnIndex: number) => void | Promise<void>;
+    /** feat-021 — column-management hide affordance. Optional so callers
+     *  that don't support it (none today, but type allows) can pass undefined. */
+    onHide?: (columnIndex: number) => void;
+    /** feat-021 — kicks off a job that re-runs only this column's cells. */
+    onReprocess?: (columnIndex: number) => void | Promise<void>;
 }
 
 export function TREditColumnMenu({
@@ -26,6 +40,8 @@ export function TREditColumnMenu({
     disabled,
     onSave,
     onDelete,
+    onHide,
+    onReprocess,
 }: TREditColumnMenuProps) {
     const [open, setOpen] = useState(false);
     const [name, setName] = useState(column.name);
@@ -36,6 +52,8 @@ export function TREditColumnMenu({
     const [saving, setSaving] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [generating, setGenerating] = useState(false);
+    const [reprocessing, setReprocessing] = useState(false);
+    const [reprocessAfterSave, setReprocessAfterSave] = useState(false);
 
     useEffect(() => {
         if (!open) {
@@ -73,19 +91,21 @@ export function TREditColumnMenu({
     async function handleSave() {
         setSaving(true);
         try {
-            await onSave({
-                ...column,
-                name: name.trim(),
-                prompt: prompt.trim(),
-                format,
-                tags: format === "tag" ? tags : undefined,
-            });
+            await onSave(
+                {
+                    ...column,
+                    name: name.trim(),
+                    prompt: prompt.trim(),
+                    format,
+                    tags: format === "tag" ? tags : undefined,
+                },
+                { reprocess: reprocessAfterSave },
+            );
             setOpen(false);
         } finally {
             setSaving(false);
         }
     }
-    console.log(tags);
 
     async function handleDelete() {
         setDeleting(true);
@@ -95,6 +115,23 @@ export function TREditColumnMenu({
         } finally {
             setDeleting(false);
         }
+    }
+
+    async function handleReprocess() {
+        if (!onReprocess) return;
+        setReprocessing(true);
+        try {
+            await onReprocess(column.index);
+            setOpen(false);
+        } finally {
+            setReprocessing(false);
+        }
+    }
+
+    function handleHide() {
+        if (!onHide) return;
+        onHide(column.index);
+        setOpen(false);
     }
 
     async function handleAutoGenerate() {
@@ -146,6 +183,37 @@ export function TREditColumnMenu({
                             <X className="h-3.5 w-3.5" />
                         </button>
                     </div>
+
+                    {/* feat-021 — quick column actions */}
+                    {(onHide || onReprocess) && (
+                        <div className="mb-3 flex flex-wrap gap-1.5">
+                            {onHide && (
+                                <button
+                                    type="button"
+                                    onClick={handleHide}
+                                    className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                >
+                                    <EyeOff className="h-3 w-3" />
+                                    Hide column
+                                </button>
+                            )}
+                            {onReprocess && (
+                                <button
+                                    type="button"
+                                    onClick={handleReprocess}
+                                    disabled={reprocessing || saving || deleting}
+                                    className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                >
+                                    {reprocessing ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                        <RefreshCw className="h-3 w-3" />
+                                    )}
+                                    Reprocess
+                                </button>
+                            )}
+                        </div>
+                    )}
                     <label className="text-xs font-medium text-foreground">
                         Label
                     </label>
@@ -275,6 +343,21 @@ export function TREditColumnMenu({
                         />
                     </div>
 
+                    {/* feat-021 — reprocess-after-save toggle */}
+                    {onReprocess && (
+                        <label className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={reprocessAfterSave}
+                                onChange={(e) =>
+                                    setReprocessAfterSave(e.target.checked)
+                                }
+                                className="h-3 w-3 rounded border-border accent-foreground cursor-pointer"
+                            />
+                            Reprocess this column after save
+                        </label>
+                    )}
+
                     <div className="mt-3 flex items-center justify-between gap-2">
                         <button
                             type="button"
@@ -297,7 +380,11 @@ export function TREditColumnMenu({
                             }
                             className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-foreground disabled:opacity-40"
                         >
-                            {saving ? "Saving…" : "Save"}
+                            {saving
+                                ? "Saving…"
+                                : reprocessAfterSave
+                                    ? "Save & reprocess"
+                                    : "Save"}
                         </button>
                     </div>
                 </div>

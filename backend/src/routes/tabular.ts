@@ -983,6 +983,207 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
     });
 });
 
+// POST /tabular-review/:reviewId/reprocess-column
+//
+// feat-021 — wipes the named column's cells back to pending and creates a
+// tabular_jobs run scoped to those cells. Reuses the bug-007 worker pool
+// (the worker's existing "skip done cells" filter naturally picks up the
+// wiped cells; see processOneJobItem in lib/tabularJobs.ts). Returns the
+// jobId so the frontend can poll the same way as /generate.
+tabularRouter.post(
+    "/:reviewId/reprocess-column",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { reviewId } = req.params;
+        const columnIndex =
+            typeof req.body?.columnIndex === "number"
+                ? req.body.columnIndex
+                : NaN;
+        if (!Number.isFinite(columnIndex) || columnIndex < 0) {
+            return void res
+                .status(400)
+                .json({ detail: "columnIndex (number) is required" });
+        }
+
+        const db = createServerSupabase();
+        const { data: review } = await db
+            .from("tabular_reviews")
+            .select("*")
+            .eq("id", reviewId)
+            .single();
+        if (!review)
+            return void res.status(404).json({ detail: "Review not found" });
+        const access = await ensureReviewAccess(review, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Review not found" });
+
+        const columns: { index: number }[] = review.columns_config ?? [];
+        const found = columns.find((c) => c.index === columnIndex);
+        if (!found)
+            return void res
+                .status(404)
+                .json({ detail: "Column not found in this review" });
+
+        // Refuse if a job is already in flight on this review — workers
+        // would race against each other on the cells we're about to wipe.
+        // User cancels or waits.
+        const { data: existing } = await db
+            .from("tabular_jobs")
+            .select("id, status")
+            .eq("review_id", reviewId)
+            .in("status", ["pending", "running"])
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (existing) {
+            return void res.status(409).json({
+                detail: "A run is already in progress on this review.",
+                inFlightJobId: existing.id,
+            });
+        }
+
+        // Wipe the column's cells so the worker treats them as needing work.
+        const { error: wipeErr } = await db
+            .from("tabular_cells")
+            .update({ status: "pending", content: null })
+            .eq("review_id", reviewId)
+            .eq("column_index", columnIndex);
+        if (wipeErr) {
+            console.error("[tabular/reprocess-column] wipe failed", wipeErr);
+            return void res.status(500).json({ detail: wipeErr.message });
+        }
+
+        // Resolve docs the same way /generate does — either docs that
+        // already have cells, or all project docs.
+        const { data: cells } = await db
+            .from("tabular_cells")
+            .select("document_id")
+            .eq("review_id", reviewId);
+        const docIdsFromCells = [
+            ...new Set((cells ?? []).map((c) => c.document_id as string)),
+        ];
+        let accessibleDocIds: string[];
+        if (docIdsFromCells.length > 0) {
+            const { data } = await db
+                .from("documents")
+                .select("id, user_id, project_id")
+                .in("id", docIdsFromCells);
+            const accessible = await filterAccessibleDocuments(
+                (data ?? []) as (Record<string, unknown> & AccessDocRow)[],
+                userId,
+                userEmail,
+                db,
+            );
+            accessibleDocIds = accessible.map((d) => d.id);
+        } else if (review.project_id) {
+            const { data } = await db
+                .from("documents")
+                .select("id, user_id, project_id")
+                .eq("project_id", review.project_id)
+                .order("created_at", { ascending: true });
+            const accessible = await filterAccessibleDocuments(
+                (data ?? []) as (Record<string, unknown> & AccessDocRow)[],
+                userId,
+                userEmail,
+                db,
+            );
+            accessibleDocIds = accessible.map((d) => d.id);
+        } else {
+            accessibleDocIds = [];
+        }
+        if (accessibleDocIds.length === 0) {
+            return void res
+                .status(400)
+                .json({ detail: "No documents to process" });
+        }
+
+        const result = await createGenerateJob({
+            db,
+            reviewId,
+            userId,
+            documentIds: accessibleDocIds,
+        });
+        if ("error" in result) {
+            console.error(
+                "[tabular/reprocess-column] job creation failed",
+                result.error,
+            );
+            return void res.status(500).json({ detail: result.error });
+        }
+        res.json({
+            jobId: result.jobId,
+            totalItems: result.totalItems,
+            columnIndex,
+        });
+    },
+);
+
+// DELETE /tabular-review/:reviewId/columns/:columnIndex
+//
+// feat-021 — removes a column from the review's columns_config and deletes
+// every tabular_cells row for that column. Hard delete; no undo. Returns
+// the updated columns_config so the frontend can rerender without an extra
+// fetch.
+tabularRouter.delete(
+    "/:reviewId/columns/:columnIndex",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { reviewId } = req.params;
+        const columnIndex = Number.parseInt(req.params.columnIndex, 10);
+        if (!Number.isFinite(columnIndex) || columnIndex < 0) {
+            return void res
+                .status(400)
+                .json({ detail: "columnIndex must be a non-negative integer" });
+        }
+
+        const db = createServerSupabase();
+        const { data: review } = await db
+            .from("tabular_reviews")
+            .select("*")
+            .eq("id", reviewId)
+            .single();
+        if (!review)
+            return void res.status(404).json({ detail: "Review not found" });
+        const access = await ensureReviewAccess(review, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Review not found" });
+
+        const columns: { index: number }[] = review.columns_config ?? [];
+        const found = columns.find((c) => c.index === columnIndex);
+        if (!found)
+            return void res
+                .status(404)
+                .json({ detail: "Column not found in this review" });
+
+        const newColumns = columns.filter((c) => c.index !== columnIndex);
+
+        const { error: cellsErr } = await db
+            .from("tabular_cells")
+            .delete()
+            .eq("review_id", reviewId)
+            .eq("column_index", columnIndex);
+        if (cellsErr) {
+            console.error("[tabular/delete-column] cells delete failed", cellsErr);
+            return void res.status(500).json({ detail: cellsErr.message });
+        }
+
+        const { error: updErr } = await db
+            .from("tabular_reviews")
+            .update({ columns_config: newColumns })
+            .eq("id", reviewId);
+        if (updErr) {
+            console.error("[tabular/delete-column] columns update failed", updErr);
+            return void res.status(500).json({ detail: updErr.message });
+        }
+
+        res.json({ ok: true, columns_config: newColumns });
+    },
+);
+
 // GET /tabular-review/reviews/:reviewId/active-job
 //
 // Returns the currently in-flight job for a review (status pending or
