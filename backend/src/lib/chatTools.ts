@@ -22,6 +22,7 @@ import {
     type OpenAIToolSchema,
 } from "./llm";
 import { verifyCitation } from "./research/citationVerifier";
+import { recordEvent } from "./agentEvents";
 
 // Olava sometimes formats inline citations as Unicode superscripts (¹, ²,
 // ¹², ²³) instead of [1], [2], [12], [23] — natural for legal-style prose.
@@ -2689,6 +2690,17 @@ export async function runLLMStream(params: {
         function: { name: string; arguments: string };
     }> = [];
 
+    // feat-015 — agent_events audit. turnStartedAt is the wall-clock anchor
+    // for latency_ms in turn.completed; toolStepCount feeds the same event.
+    const turnStartedAt = Date.now();
+    let toolStepCount = 0;
+    recordEvent({
+        db,
+        chatId,
+        type: "turn.started",
+        payload: { model: model ?? "default" },
+    });
+
     // ─── Per-marker citation verifier (parallel) ────────────────────────────
     // Olava is cheap; one Olava call per [N] marker is the right cost
     // profile, and firing them as soon as each marker streams (rather than
@@ -3010,6 +3022,26 @@ export async function runLLMStream(params: {
                     arguments: JSON.stringify(c.input),
                 },
             }));
+
+            // feat-015 — emit tool.call_started per dispatched tool *before*
+            // it runs so the audit log records intent even when the tool
+            // crashes mid-execution. args_keys (not values) keeps PII out.
+            const toolBatchStartedAt = Date.now();
+            for (const c of toolCalls) {
+                let argKeys: string[] = [];
+                try {
+                    argKeys = Object.keys(JSON.parse(c.function.arguments || "{}"));
+                } catch {
+                    /* malformed args — leave argKeys empty */
+                }
+                recordEvent({
+                    db,
+                    chatId,
+                    type: "tool.call_started",
+                    payload: { name: c.function.name, args_keys: argKeys },
+                });
+            }
+
             const {
                 toolResults,
                 docsRead,
@@ -3162,6 +3194,26 @@ export async function runLLMStream(params: {
                 }
             }
 
+            // feat-015 — emit tool.call_succeeded per call with the batch
+            // latency as a coarse-grained per-tool timing. Once feat-016
+            // ships the {ok,error,retryable} envelope we'll classify per-
+            // tool failures here as tool.call_failed.
+            const toolBatchLatencyMs = Date.now() - toolBatchStartedAt;
+            for (const nr of normalized) {
+                const matchingCall = toolCalls.find((c) => c.id === nr.tool_use_id);
+                toolStepCount += 1;
+                recordEvent({
+                    db,
+                    chatId,
+                    type: "tool.call_succeeded",
+                    payload: {
+                        name: matchingCall?.function.name ?? null,
+                        latency_ms: toolBatchLatencyMs,
+                        result_length: nr.content.length,
+                    },
+                });
+            }
+
             return normalized;
         },
     });
@@ -3201,6 +3253,19 @@ export async function runLLMStream(params: {
           });
     write(`data: ${JSON.stringify({ type: "citations", citations })}\n\n`);
     write("data: [DONE]\n\n");
+
+    // feat-015 — turn.completed audit. Latency is wall-clock from start of
+    // runLLMStream; total_steps counts tool dispatches across all iterations.
+    recordEvent({
+        db,
+        chatId,
+        type: "turn.completed",
+        payload: {
+            total_steps: toolStepCount,
+            total_latency_ms: Date.now() - turnStartedAt,
+            text_length: fullText.length,
+        },
+    });
 
     return { fullText, events, assistantToolCalls };
 }
