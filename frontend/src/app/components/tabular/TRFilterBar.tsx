@@ -106,7 +106,24 @@ export function TRFilterBar({
                         columns={columns}
                         existing={filters}
                         onAdd={(f) => {
-                            onChange([...filters, f]);
+                            // Flag and Verified each have at most one active
+                            // filter — same kind replaces, doesn't stack. The
+                            // "OR within a kind" case is already handled by
+                            // multi-select inside the kind's own form
+                            // (e.g. flags: ["yellow","red"]). Stacking caused
+                            // confusing AND semantics + UI clutter.
+                            // Text predicates can stack (different columns).
+                            const next =
+                                f.kind === "text"
+                                    ? [...filters, f]
+                                    : [
+                                          ...filters.filter(
+                                              (existing) =>
+                                                  existing.kind !== f.kind,
+                                          ),
+                                          f,
+                                      ];
+                            onChange(next);
                             setAdderOpen(false);
                         }}
                         onClose={() => setAdderOpen(false)}
@@ -196,18 +213,34 @@ function AddFilterPopover({
     onClose: () => void;
 }) {
     type Kind = "flag" | "verified" | "text";
-    const [kind, setKind] = useState<Kind>("flag");
+    // Default tab to whichever single-instance filter is *missing* — flag
+    // first if not yet set, then verified, else text. Less clicking when
+    // building a multi-faceted filter set.
+    const existingFlag = existing.find((f) => f.kind === "flag");
+    const existingVerified = existing.find((f) => f.kind === "verified");
+    const initialKind: Kind = !existingFlag
+        ? "flag"
+        : !existingVerified
+            ? "verified"
+            : "text";
+    const [kind, setKind] = useState<Kind>(initialKind);
 
-    // flag: multi-select
-    const [flagSet, setFlagSet] = useState<Set<FlagValue>>(() => {
-        const existingFlag = existing.find((f) => f.kind === "flag");
-        return existingFlag ? new Set(existingFlag.flags) : new Set();
-    });
+    // flag: multi-select. Pre-fill from existing filter so re-opening the
+    // popover edits in place.
+    const [flagSet, setFlagSet] = useState<Set<FlagValue>>(() =>
+        existingFlag && existingFlag.kind === "flag"
+            ? new Set(existingFlag.flags)
+            : new Set(),
+    );
 
-    // verified
+    // verified — pre-fill from existing filter.
     const [verifiedState, setVerifiedState] = useState<
         "verified" | "unverified"
-    >("verified");
+    >(() =>
+        existingVerified && existingVerified.kind === "verified"
+            ? existingVerified.state
+            : "verified",
+    );
 
     // text
     const [textColumn, setTextColumn] = useState<number | null>(
@@ -238,7 +271,7 @@ function AddFilterPopover({
     }
 
     return (
-        <div className="absolute left-0 top-full z-[80] mt-1.5 w-80 rounded-xl border border-border bg-card p-3 shadow-lg">
+        <div className="absolute right-0 top-full z-[80] mt-1.5 w-80 rounded-xl border border-border bg-card p-3 shadow-lg">
             <div className="flex items-center justify-between mb-3">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Add filter
