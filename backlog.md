@@ -724,23 +724,71 @@ Goal: make the Finch agent loop more robust by porting distilled patterns from `
 
 ---
 
-### bug-007 Cap tabular generate concurrency
-**Status:** ready
+### bug-007 Tabular generate as durable job + worker pool (5K–10K-doc scale)
+**Status:** done (2026-05-07)
 **Branch:** `bug-007-tabular-concurrency`
-**Priority:** Medium — `SECURITY.md` H1, cost-DoS surface.
-**Size:** Small (~1 hour)
+**Priority:** High — `SECURITY.md` H1 + product target of 5K–10K-doc tabular projects (vLLM cannot serve N concurrent inference calls at that scale).
+**Size:** Large (~1.5 days)
 
-**Problem.** `backend/src/routes/tabular.ts:960` fans out N parallel LLM calls for N documents with `Promise.all`. A user with 200 documents triggers 200 simultaneous LLM calls. Cost-DoS by accident or malice.
+**Problem.** The previous tabular-generate endpoint ran the per-doc LLM fan-out inline in the HTTP handler with `Promise.all` over `docs.map`, streaming progress over SSE. For the 200-doc case it worked; for the 5K–10K-doc product target it fails on multiple axes:
+1. **vLLM concurrency.** Cannot serve N simultaneous inference requests at scale — bounded queue with no backpressure means cost spikes + latency cliffs.
+2. **Long-lived HTTP request.** A 10K-doc run at ~10s/doc occupies one Express handler for ~3 hours. Browser tab close, proxy idle timeout, deploy, OOM, and backend restart all kill the run with no recovery.
+3. **No partial progress recovery.** Cells written before the run died are kept; everything in flight is lost.
 
-**Approach.** Add `p-limit` and cap concurrency at 5 in the tabular generation path.
+A first-pass `p-limit(5)` cap was rejected as a band-aid — it caps in-process concurrency but doesn't fix the durability or recovery problem. Replaced with the architecture below.
 
-**Files to modify.**
-- `backend/src/routes/tabular.ts` — wrap the `Promise.all` in `pLimit(5)`.
-- `backend/package.json` — add `p-limit` if not already a direct dep.
+**Architecture (as shipped).** Durable job table + in-process worker pool + frontend polling.
 
-**Acceptance.**
-- 200-doc tabular generate sends at most 5 LLM requests in flight.
-- Throughput unchanged for small N (≤5).
+**Schema (migration `005_tabular_jobs.sql`).**
+- `tabular_jobs(id, review_id, user_id, status, total_items, started_at, completed_at, cancel_requested_at, error, timestamps)` — one row per `/generate` run.
+- `tabular_job_items(id, job_id, document_id, status, attempt_count, lease_expires_at, error, timestamps)` — one row per (job, document) work unit. `document_id` deliberately NOT a foreign key, so we keep the historical record if a doc is deleted.
+- Partial indexes for the worker claim query (`status IN ('pending','running')`) and for active-job lookup.
+- RLS via the existing `can_access_review()` predicate.
+- `claim_tabular_job_item(lease_seconds)` RPC: `UPDATE … WHERE id = (SELECT … WHERE status='pending' OR (status='running' AND lease_expires_at < now()) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`. SKIP LOCKED makes this safe across multiple Express instances if Railway ever scales past one.
+
+**API (`routes/tabular.ts`).**
+- `POST /tabular-review/:reviewId/generate` — creates the job + N items, returns `{ jobId, totalItems, resumed }`. Idempotent: if a pending/running job already exists for the review, points caller at it instead of creating a parallel run.
+- `GET /tabular-review/jobs/:jobId` — status + counts (computed from items table on demand; no race-prone counter columns).
+- `GET /tabular-review/jobs/:jobId/cells?since=<iso>` — cells for items completed since `since`. Frontend feeds the highest `lastCompletedAt` it has seen back as the next `since`.
+- `POST /tabular-review/jobs/:jobId/cancel` — soft cancel; sets `cancel_requested_at`. Workers check between items; in-flight items finish their LLM call naturally.
+- `GET /tabular-review/reviews/:reviewId/active-job` — used by the frontend on page mount to detect an in-flight run started in another tab / before a backend restart and resume polling.
+
+**Worker pool (`lib/tabularJobs.ts`).** In-process. `TabularWorkerPool` started in `src/index.ts` after `listen()` with N workers (default 10, env `TABULAR_GENERATE_CONCURRENCY`). Each worker loops:
+1. Atomic claim via the RPC; lease 5min (env `TABULAR_JOB_LEASE_SECONDS`). On nothing claimed → sleep 500ms (env `TABULAR_WORKER_IDLE_MS`).
+2. If parent job has `cancel_requested_at` → mark item `skipped`.
+3. Process: download → extract markdown → `queryGeminiAllColumns` → write cells → mark item `completed` / `error`.
+4. After each transition, call `maybeFinalizeJob` which queries the items table for the resolved count and flips the parent job to `completed` / `cancelled` once everything is settled.
+
+Graceful shutdown on SIGTERM/SIGINT stops the loops; in-flight items expire their lease after 5min and a fresh worker on the next deploy reclaims them. `attempt_count` increments each reclaim so reclaim cycles are visible in the audit.
+
+**Frontend (`TabularReviewView.tsx`).** EventSource removed. New flow:
+1. On mount, `getActiveTabularJob(reviewId)`. If a job is in flight, start the polling loop (auto-resume after page refresh / browser restart / backend restart).
+2. `handleGenerate` calls `startTabularGenerate(reviewId)` and starts polling.
+3. Polling loop (`NEXT_PUBLIC_TABULAR_POLL_MS`, default 1500ms): `GET /jobs/:id` for status counts + `GET /jobs/:id/cells?since=<lastCompletedAt>` for incremental cell deltas. Reducer applies cells idempotently.
+4. Run button shows live `12/200` progress while generating; flips to a Cancel-on-click affordance. `handleCancelGenerate` issues the cancel POST and lets the poller observe the status flip.
+
+**Files added.**
+- `backend/migrations/005_tabular_jobs.sql`
+- `backend/src/lib/tabularJobs.ts` (~700 LOC: helpers moved from `routes/tabular.ts` + new job lifecycle + worker pool)
+
+**Files modified.**
+- `backend/src/routes/tabular.ts` — POST /generate rewritten; new GET/POST endpoints added; helpers (extract, queryGemini, queryGeminiAllColumns, formatPromptSuffix, types) moved to `lib/tabularJobs.ts` to avoid circular imports.
+- `backend/src/index.ts` — start/stop `TabularWorkerPool` around `app.listen()`.
+- `frontend/src/app/lib/mikeApi.ts` — added `startTabularGenerate`, `getTabularJob`, `getTabularJobCells`, `cancelTabularJob`, `getActiveTabularJob`; removed `streamTabularGeneration`.
+- `frontend/src/app/components/tabular/TabularReviewView.tsx` — replaced SSE reader with `pollJob`; added active-job-on-mount; added cancel button.
+
+**Env knobs.** `TABULAR_GENERATE_CONCURRENCY` (workers, default 10), `TABULAR_JOB_LEASE_SECONDS` (default 300), `TABULAR_WORKER_IDLE_MS` (default 500), `NEXT_PUBLIC_TABULAR_POLL_MS` (default 1500).
+
+**Acceptance (verified).**
+- ✅ Migration applied locally; 6 RLS policies + claim RPC + tables + indexes in place.
+- ✅ `tsc --noEmit` clean (backend + frontend).
+- ✅ All 16 backend tests pass (no regressions).
+- ✅ POST /generate returns immediately with `{ jobId, totalItems }`; SSE no longer in the path.
+- ✅ Browser tab close mid-run → reopen → polling resumes from `active-job`.
+- ✅ Backend restart mid-run → workers reclaim 'running' items whose lease has expired and resume.
+- ✅ Cancel during run → workers stop dispatching; in-flight items finish naturally; status flips to `cancelled` once all items resolve.
+
+**Known limitation: items completing in flight don't surface partial cells.** If a worker is mid-way through producing 7 of 10 columns for a doc, those 7 cells exist in the DB but the GET /cells endpoint won't return them until the item reaches a terminal state. Acceptable v1 behaviour — matches the user's mental model that a doc's row of cells appears together when its turn finishes. If we need live per-cell streaming back, add a `tabular_cells.updated_at` column + a separate query path; deferred.
 
 ---
 

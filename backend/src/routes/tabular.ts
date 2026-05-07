@@ -3,14 +3,13 @@ import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { downloadFile } from "../lib/storage";
 import { loadActiveVersion } from "../lib/documentVersions";
-import { normalizeDocxZipPaths } from "../lib/convert";
 import {
     runLLMStream,
     TABULAR_TOOLS,
     type ChatMessage,
     type TabularCellStore,
 } from "../lib/chatTools";
-import { completeText, streamChatWithTools } from "../lib/llm";
+import { completeText } from "../lib/llm";
 import { getUserApiKeys, getUserModelSettings } from "../lib/userSettings";
 import {
     checkProjectAccess,
@@ -18,31 +17,16 @@ import {
     ensureReviewAccess,
     listAccessibleProjectIds,
 } from "../lib/access";
-
-function formatPromptSuffix(format?: string, tags?: string[]): string {
-    switch (format) {
-        case "bulleted_list":
-            return ' The "summary" field in your JSON response must be a markdown bulleted list only — no prose. Format: each item on its own line, prefixed with "* " (asterisk + single space), e.g.\n* First item\n* Second item\n* Third item';
-        case "number":
-            return ' The "summary" field in your JSON response must be a single number only. No units or explanation.';
-        case "percentage":
-            return ' The "summary" field in your JSON response must be a single percentage value only (e.g. 42%). No explanation.';
-        case "monetary_amount":
-            return ' The "summary" field in your JSON response must be the monetary value only, including currency symbol (e.g. $1,234.56). No explanation.';
-        case "currency":
-            return ' The "summary" field in your JSON response must contain only the currency code(s). Wrap each code in double square brackets, e.g. [[USD]] or [[EUR]]. No other text.';
-        case "yes_no":
-            return ' The "summary" field in your JSON response must be [[Yes]] or [[No]] only. The "reasoning" field MUST include an inline citation [[page:N||quote:verbatim excerpt ≤25 words]] pointing to the exact language in the document that supports the Yes/No answer.';
-        case "date":
-            return ' The "summary" field in your JSON response must be the date only in DD Month YYYY format (e.g. 1 January 2024). If a range, give both dates separated by an em dash. The "reasoning" field MUST include an inline citation [[page:N||quote:verbatim excerpt ≤25 words]] pointing to the exact place in the document where the date is found.';
-        case "tag":
-            return tags?.length
-                ? ` The \"summary\" field in your JSON response must contain exactly one tag wrapped in double square brackets. Available tags: ${tags.map((t) => `[[${t}]]`).join(", ")}. No other text. The \"reasoning\" field MUST include an inline citation [[page:N||quote:verbatim excerpt ≤25 words]] pointing to the exact language in the document that supports the chosen tag.`
-                : "";
-        default:
-            return "";
-    }
-}
+// bug-007 — tabular extraction + LLM helpers + the durable-job worker
+// pool live in lib/tabularJobs.ts. Importing them here so the per-cell
+// regenerate route can reuse the helpers and POST /generate can create a
+// job instead of running the work inline.
+import {
+    extractPdfMarkdown,
+    extractDocxMarkdown,
+    queryGemini,
+    createGenerateJob,
+} from "../lib/tabularJobs";
 
 export const tabularRouter = Router();
 
@@ -884,6 +868,12 @@ tabularRouter.post(
 );
 
 // POST /tabular-review/:reviewId/generate
+//
+// bug-007 — used to be a long-lived SSE stream that ran the per-doc LLM
+// fan-out inline in the request handler. Now creates a durable job +
+// items rows and returns immediately; an in-process worker pool processes
+// items in the background and the frontend polls for updates. Survives
+// browser tab close, proxy idle timeout, and backend restart.
 tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
@@ -911,166 +901,294 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
     if (columns.length === 0)
         return void res.status(400).json({ detail: "No columns configured" });
 
+    // Prevent overlapping runs on the same review. If a job is already
+    // pending or running, point the caller at it instead of creating a
+    // second one — workers in the second job would race against the first
+    // on the same cells.
+    const { data: existing } = await db
+        .from("tabular_jobs")
+        .select("id, total_items")
+        .eq("review_id", reviewId)
+        .in("status", ["pending", "running"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    if (existing) {
+        return void res.json({
+            jobId: existing.id,
+            totalItems: existing.total_items,
+            resumed: true,
+        });
+    }
+
+    // Resolve the docs list — same logic as before. Either the docs that
+    // already have cells (re-run case) or every doc in the project.
     const { data: cells } = await db
         .from("tabular_cells")
-        .select("*")
+        .select("document_id")
         .eq("review_id", reviewId);
-    const cellMap = new Map<string, Record<string, unknown>>();
-    for (const cell of cells ?? [])
-        cellMap.set(`${cell.document_id}:${cell.column_index}`, cell);
+    const docIdsFromCells = [
+        ...new Set((cells ?? []).map((c) => c.document_id as string)),
+    ];
 
-    const docIds = [...new Set((cells ?? []).map((c) => c.document_id))];
-    let docs: Record<string, unknown>[] = [];
-    if (docIds.length > 0) {
+    let accessibleDocIds: string[];
+    if (docIdsFromCells.length > 0) {
         const { data } = await db
             .from("documents")
-            .select("id, filename, file_type, page_count, user_id, project_id")
-            .in("id", docIds);
-        docs = await filterAccessibleDocuments(
+            .select("id, user_id, project_id")
+            .in("id", docIdsFromCells);
+        const accessible = await filterAccessibleDocuments(
             (data ?? []) as (Record<string, unknown> & AccessDocRow)[],
             userId,
             userEmail,
             db,
         );
+        accessibleDocIds = accessible.map((d) => d.id);
     } else if (review.project_id) {
         const { data } = await db
             .from("documents")
-            .select("id, filename, file_type, page_count, user_id, project_id")
+            .select("id, user_id, project_id")
             .eq("project_id", review.project_id)
             .order("created_at", { ascending: true });
-        docs = await filterAccessibleDocuments(
+        const accessible = await filterAccessibleDocuments(
             (data ?? []) as (Record<string, unknown> & AccessDocRow)[],
             userId,
             userEmail,
             db,
         );
+        accessibleDocIds = accessible.map((d) => d.id);
+    } else {
+        accessibleDocIds = [];
     }
 
-    const { tabular_model, api_keys } = await getUserModelSettings(userId, db);
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    const write = (line: string) => res.write(line);
-
-    try {
-        await Promise.all(
-            docs.map(async (doc) => {
-                const docId = doc.id as string;
-                const filename = doc.filename as string;
-                let markdown = "";
-
-                const active = await loadActiveVersion(docId, db);
-                if (active) {
-                    const buf = await downloadFile(active.storage_path);
-                    if (buf) {
-                        try {
-                            markdown =
-                                (doc.file_type as string) === "pdf"
-                                    ? await extractPdfMarkdown(buf)
-                                    : await extractDocxMarkdown(buf);
-                        } catch (err) {
-                            console.error(
-                                `[tabular/generate] extraction error doc=${docId}`,
-                                err,
-                            );
-                        }
-                    }
-                }
-
-                // Filter to only columns that need processing
-                const columnsToProcess = columns.filter((col) => {
-                    const cell = cellMap.get(`${docId}:${col.index}`);
-                    return !(cell?.status === "done" && cell?.content);
-                });
-                if (columnsToProcess.length === 0) return;
-
-                // Mark all as generating upfront
-                for (const col of columnsToProcess) {
-                    write(
-                        `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: col.index, content: null, status: "generating" })}\n\n`,
-                    );
-                    const existingCell = cellMap.get(`${docId}:${col.index}`);
-                    if (existingCell) {
-                        await db
-                            .from("tabular_cells")
-                            .update({ status: "generating", content: null })
-                            .eq("id", existingCell.id);
-                    } else {
-                        await db.from("tabular_cells").insert({
-                            review_id: reviewId,
-                            document_id: docId,
-                            column_index: col.index,
-                            status: "generating",
-                        });
-                    }
-                }
-
-                // Single LLM call for all columns, streaming one JSON line per column
-                const receivedColumns = new Set<number>();
-                try {
-                    await queryGeminiAllColumns(
-                        tabular_model,
-                        filename,
-                        markdown,
-                        columnsToProcess,
-                        async (columnIndex, result) => {
-                            receivedColumns.add(columnIndex);
-                            await db
-                                .from("tabular_cells")
-                                .update({
-                                    content: JSON.stringify(result),
-                                    status: "done",
-                                })
-                                .eq("review_id", reviewId)
-                                .eq("document_id", docId)
-                                .eq("column_index", columnIndex);
-                            write(
-                                `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: columnIndex, content: result, status: "done" })}\n\n`,
-                            );
-                        },
-                        api_keys,
-                    );
-                } catch (err) {
-                    console.error(
-                        `[tabular/generate] queryGeminiAllColumns error doc=${docId}`,
-                        err,
-                    );
-                }
-
-                // Mark any columns the LLM didn't return as error
-                for (const col of columnsToProcess) {
-                    if (!receivedColumns.has(col.index)) {
-                        await db
-                            .from("tabular_cells")
-                            .update({ status: "error" })
-                            .eq("review_id", reviewId)
-                            .eq("document_id", docId)
-                            .eq("column_index", col.index);
-                        write(
-                            `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: col.index, content: null, status: "error" })}\n\n`,
-                        );
-                    }
-                }
-            }),
-        );
-
-        write("data: [DONE]\n\n");
-    } catch (err) {
-        console.error("[tabular/generate] stream error", err);
-        try {
-            write(
-                `data: ${JSON.stringify({ type: "error", message: String(err) })}\n\ndata: [DONE]\n\n`,
-            );
-        } catch {
-            /* ignore */
-        }
-    } finally {
-        res.end();
+    if (accessibleDocIds.length === 0) {
+        return void res.status(400).json({ detail: "No documents to process" });
     }
+
+    const result = await createGenerateJob({
+        db,
+        reviewId,
+        userId,
+        documentIds: accessibleDocIds,
+    });
+    if ("error" in result) {
+        console.error("[tabular/generate] job creation failed", result.error);
+        return void res.status(500).json({ detail: result.error });
+    }
+
+    res.json({
+        jobId: result.jobId,
+        totalItems: result.totalItems,
+        resumed: false,
+    });
+});
+
+// GET /tabular-review/reviews/:reviewId/active-job
+//
+// Returns the currently in-flight job for a review (status pending or
+// running), if any. The frontend calls this on review-page mount to
+// detect a run that's still happening — possibly started in another tab
+// or before a backend restart — and resume polling without a fresh POST.
+tabularRouter.get(
+    "/reviews/:reviewId/active-job",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { reviewId } = req.params;
+        const db = createServerSupabase();
+
+        const { data: review } = await db
+            .from("tabular_reviews")
+            .select("id, user_id, shared_with, project_id")
+            .eq("id", reviewId)
+            .single();
+        if (!review) return void res.status(404).json({ detail: "Not found" });
+        const access = await ensureReviewAccess(review, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Not found" });
+
+        const { data: job } = await db
+            .from("tabular_jobs")
+            .select("id, status, total_items, started_at, created_at")
+            .eq("review_id", reviewId)
+            .in("status", ["pending", "running"])
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        res.json({ job: job ?? null });
+    },
+);
+
+// GET /tabular-review/jobs/:jobId
+//
+// Status snapshot for the progress bar. completed_items / error_items /
+// skipped_items computed from the items table on demand — no race-prone
+// counter columns to keep in sync.
+tabularRouter.get("/jobs/:jobId", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { jobId } = req.params;
+    const db = createServerSupabase();
+
+    const { data: job } = await db
+        .from("tabular_jobs")
+        .select(
+            "id, review_id, status, total_items, started_at, completed_at, cancel_requested_at, error, created_at, updated_at",
+        )
+        .eq("id", jobId)
+        .single();
+    if (!job) return void res.status(404).json({ detail: "Job not found" });
+
+    // Access via parent review (RLS would also enforce this; we
+    // double-check here for nicer 404 instead of empty response).
+    const { data: review } = await db
+        .from("tabular_reviews")
+        .select("id, user_id, shared_with, project_id")
+        .eq("id", job.review_id)
+        .single();
+    if (!review) return void res.status(404).json({ detail: "Job not found" });
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Job not found" });
+
+    // Counts from the items table — single grouped query.
+    const { data: itemRows } = await db
+        .from("tabular_job_items")
+        .select("status")
+        .eq("job_id", jobId);
+    const counts = {
+        pending: 0,
+        running: 0,
+        completed: 0,
+        error: 0,
+        skipped: 0,
+    };
+    for (const row of (itemRows ?? []) as { status: keyof typeof counts }[]) {
+        if (row.status in counts) counts[row.status] += 1;
+    }
+
+    res.json({
+        ...job,
+        completed_items: counts.completed,
+        error_items: counts.error,
+        skipped_items: counts.skipped,
+        running_items: counts.running,
+        pending_items: counts.pending,
+    });
+});
+
+// GET /tabular-review/jobs/:jobId/cells?since=<iso>
+//
+// Incremental cell payload for the frontend poll loop. Returns cells for
+// items that completed since `since`; the frontend tracks the most recent
+// completed_at it has seen and feeds it back as the next `since`. Cells
+// for in-flight (status=running) items aren't returned until the item
+// finishes — matches the user's mental model that a doc's whole row of
+// cells appears together when its turn finishes.
+tabularRouter.get("/jobs/:jobId/cells", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { jobId } = req.params;
+    const since =
+        typeof req.query.since === "string" ? req.query.since : "1970-01-01";
+    const db = createServerSupabase();
+
+    const { data: job } = await db
+        .from("tabular_jobs")
+        .select("id, review_id")
+        .eq("id", jobId)
+        .single();
+    if (!job) return void res.status(404).json({ detail: "Job not found" });
+
+    const { data: review } = await db
+        .from("tabular_reviews")
+        .select("id, user_id, shared_with, project_id")
+        .eq("id", job.review_id)
+        .single();
+    if (!review) return void res.status(404).json({ detail: "Job not found" });
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Job not found" });
+
+    const { data: itemsCompletedSince } = await db
+        .from("tabular_job_items")
+        .select("document_id, completed_at, status")
+        .eq("job_id", jobId)
+        .not("completed_at", "is", null)
+        .gt("completed_at", since)
+        .order("completed_at", { ascending: true });
+
+    const docIds = [
+        ...new Set(
+            (itemsCompletedSince ?? []).map(
+                (it) => it.document_id as string,
+            ),
+        ),
+    ];
+    if (docIds.length === 0) {
+        return void res.json({ cells: [], lastCompletedAt: since });
+    }
+
+    const { data: cells } = await db
+        .from("tabular_cells")
+        .select("document_id, column_index, content, status")
+        .eq("review_id", job.review_id)
+        .in("document_id", docIds);
+
+    const lastCompletedAt = (
+        itemsCompletedSince as { completed_at: string }[] | null
+    )?.at(-1)?.completed_at ?? since;
+
+    res.json({
+        cells: cells ?? [],
+        lastCompletedAt,
+    });
+});
+
+// POST /tabular-review/jobs/:jobId/cancel
+//
+// Soft cancel — sets cancel_requested_at; workers check between items
+// and skip the rest. In-flight items finish their LLM call naturally
+// (no abort signals threaded through). Returns the new job snapshot
+// so the frontend can stop polling once status flips.
+tabularRouter.post("/jobs/:jobId/cancel", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { jobId } = req.params;
+    const db = createServerSupabase();
+
+    const { data: job } = await db
+        .from("tabular_jobs")
+        .select("id, review_id, status")
+        .eq("id", jobId)
+        .single();
+    if (!job) return void res.status(404).json({ detail: "Job not found" });
+
+    const { data: review } = await db
+        .from("tabular_reviews")
+        .select("id, user_id, shared_with, project_id")
+        .eq("id", job.review_id)
+        .single();
+    if (!review) return void res.status(404).json({ detail: "Job not found" });
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Job not found" });
+
+    if (job.status === "completed" || job.status === "cancelled") {
+        return void res.json({ id: job.id, status: job.status });
+    }
+
+    await db
+        .from("tabular_jobs")
+        .update({
+            cancel_requested_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobId);
+
+    res.json({ id: jobId, status: job.status, cancel_requested: true });
 });
 
 // GET /tabular-review/:reviewId/chats — list chats (metadata only, no messages)
@@ -1516,71 +1634,11 @@ function parseCellContent(
     return null;
 }
 
-async function queryGemini(
-    model: string,
-    filename: string,
-    documentText: string,
-    columnPrompt: string,
-    format?: string,
-    tags?: string[],
-    apiKeys?: import("../lib/llm").UserApiKeys,
-) {
-    const suffix = formatPromptSuffix(format as never, tags);
-    const fullPrompt = `${columnPrompt}${suffix} If not found, state "Not Found". Leave all reasoning and explanation in the "reasoning" field only.`;
-
-    const EXTRACTION_SYSTEM = `You are a legal document analyst. Return ONLY valid JSON:
-{"summary": string, "flag": "green"|"grey"|"yellow"|"red", "reasoning": string}
-
-The "summary" and "reasoning" field values may use markdown formatting (bullets, bold, italics, etc.) — the values are still plain JSON strings (escape newlines as \\n), but the text inside will be rendered as markdown in the UI.
-
-The "summary" field must contain only the extracted value with inline citations — no explanation or reasoning. Every factual claim in "summary" must be followed immediately by a citation in the format [[page:N||quote:exact quoted text]], where N is the page number and the quote is a short verbatim excerpt (≤ 25 words). The quote must be narrowly scoped to the specific claim it supports — extract only the exact words that support that statement, not the surrounding sentence or paragraph. Do not have multiple claims share the same long quote; if two different statements need different evidence, give each its own short, narrowly-scoped quote. All reasoning and explanation belongs in "reasoning" only, which may also contain citations.`;
-
-    let raw: string;
-    try {
-        raw = await completeText({
-            model,
-            systemPrompt: EXTRACTION_SYSTEM,
-            user: `Document: ${filename}\n\n${documentText.slice(0, 120_000)}\n\n---\nInstruction: ${fullPrompt}`,
-            maxTokens: 2048,
-            apiKeys,
-        });
-    } catch (err) {
-        console.error("[queryGemini] completion failed", err);
-        return null;
-    }
-    try {
-        const parsed = JSON.parse(
-            raw
-                .replace(/^```(?:json)?\n?/i, "")
-                .replace(/\n?```$/, "")
-                .trim(),
-        ) as {
-            summary?: unknown;
-            value?: unknown;
-            flag?: unknown;
-            reasoning?: unknown;
-        };
-        return {
-            summary:
-                String(parsed.summary ?? parsed.value ?? "").trim() ||
-                "Not addressed",
-            flag: (["green", "grey", "yellow", "red"] as const).includes(
-                parsed.flag as "green",
-            )
-                ? (parsed.flag as "green")
-                : "grey",
-            reasoning: String(parsed.reasoning ?? ""),
-        };
-    } catch {
-        return raw.trim()
-            ? {
-                  summary: raw.trim().slice(0, 500),
-                  flag: "grey" as const,
-                  reasoning: "",
-              }
-            : null;
-    }
-}
+// bug-007 — queryGemini, queryGeminiAllColumns, extractPdfMarkdown,
+// extractDocxMarkdown, formatPromptSuffix, Column, CellResult moved to
+// lib/tabularJobs.ts so the worker pool doesn't import this route file
+// (avoids a circular import). queryGemini is still imported above for
+// the per-cell regenerate route.
 
 async function generateChatTitle(
     model: string,
@@ -1658,170 +1716,5 @@ function buildTabularContext(
     return lines.join("\n");
 }
 
-type CellResult = {
-    summary: string;
-    flag: "green" | "grey" | "yellow" | "red";
-    reasoning: string;
-};
-type Column = {
-    index: number;
-    name: string;
-    prompt: string;
-    format?: string;
-    tags?: string[];
-};
-
-async function queryGeminiAllColumns(
-    model: string,
-    filename: string,
-    documentText: string,
-    columns: Column[],
-    onResult: (columnIndex: number, result: CellResult) => Promise<void>,
-    apiKeys?: import("../lib/llm").UserApiKeys,
-): Promise<void> {
-    const columnsDesc = columns
-        .map((col) => {
-            const suffix = formatPromptSuffix(col.format as never, col.tags);
-            const fullPrompt = `${col.prompt}${suffix} If not found, state "Not Found".`;
-            return `Column ${col.index} — "${col.name}": ${fullPrompt}`;
-        })
-        .join("\n");
-
-    const SYSTEM = `You are a legal document analyst. Extract information for each column listed below.
-
-For each column, output exactly one minified JSON object on its own line (no line breaks inside the JSON), then a newline. Process columns in order and output each result as soon as you finish it.
-
-Line format:
-{"column_index": <N>, "summary": <string>, "flag": <"green"|"grey"|"yellow"|"red">, "reasoning": <string>}
-
-Rules:
-- "summary": the extracted value with inline citations [[page:N||quote:verbatim excerpt ≤25 words]] after every factual claim. No explanation or reasoning here. Quotes must be narrowly scoped to the specific claim — extract only the exact supporting words, not the full surrounding sentence. Do not reuse one long quote across multiple statements; give each claim its own short, precise quote.
-- "flag": green = standard/favorable, yellow = needs attention, red = problematic/unfavorable, grey = neutral/not found
-- "reasoning": brief explanation of the extraction
-- The "summary" and "reasoning" string VALUES may use markdown (bullets, bold, italics, etc.) — escape newlines as \\n inside the JSON string. This markdown is rendered in the UI.
-- Output ONLY the JSON lines themselves. Do NOT wrap the response in markdown code fences (e.g. \`\`\`json), and do not add any preamble or summary.`;
-
-    const USER = `Document: ${filename}\n\n${documentText.slice(0, 120_000)}\n\n---\nColumns to extract:\n${columnsDesc}`;
-
-    let contentBuffer = "";
-    const pending: Promise<unknown>[] = [];
-
-    const processLine = async (line: string) => {
-        const trimmed = line.trim();
-        if (!trimmed) return;
-        try {
-            const parsed = JSON.parse(trimmed) as {
-                column_index?: unknown;
-                summary?: unknown;
-                flag?: unknown;
-                reasoning?: unknown;
-            };
-            if (typeof parsed.column_index !== "number") return;
-            const col = columns.find((c) => c.index === parsed.column_index);
-            if (!col) return;
-            await onResult(parsed.column_index, {
-                summary: String(parsed.summary ?? "").trim() || "Not addressed",
-                flag: (["green", "grey", "yellow", "red"] as const).includes(
-                    parsed.flag as "green",
-                )
-                    ? (parsed.flag as CellResult["flag"])
-                    : "grey",
-                reasoning: String(parsed.reasoning ?? ""),
-            });
-        } catch {
-            // malformed line — skip
-        }
-    };
-
-    try {
-        await streamChatWithTools({
-            model,
-            systemPrompt: SYSTEM,
-            messages: [{ role: "user", content: USER }],
-            tools: [],
-            apiKeys,
-            callbacks: {
-                onContentDelta: (delta) => {
-                    contentBuffer += delta;
-                    let newlineIdx: number;
-                    while ((newlineIdx = contentBuffer.indexOf("\n")) !== -1) {
-                        const completedLine = contentBuffer.slice(
-                            0,
-                            newlineIdx,
-                        );
-                        contentBuffer = contentBuffer.slice(newlineIdx + 1);
-                        pending.push(processLine(completedLine));
-                    }
-                },
-            },
-        });
-    } catch (err) {
-        console.error("[queryGeminiAllColumns] stream failed", err);
-    }
-
-    if (contentBuffer.trim()) pending.push(processLine(contentBuffer));
-    await Promise.all(pending);
-}
-
-async function extractPdfMarkdown(buf: ArrayBuffer): Promise<string> {
-    try {
-        const pdfjsLib = await import(
-            "pdfjs-dist/legacy/build/pdf.mjs" as string
-        );
-        const pdf = await (
-            pdfjsLib as unknown as {
-                getDocument: (opts: unknown) => {
-                    promise: Promise<{
-                        numPages: number;
-                        getPage: (n: number) => Promise<{
-                            getTextContent: () => Promise<{
-                                items: { str?: string; hasEOL?: boolean }[];
-                            }>;
-                        }>;
-                    }>;
-                };
-            }
-        ).getDocument({ data: new Uint8Array(buf) }).promise;
-        const pages: string[] = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const tc = await page.getTextContent();
-            const text = tc.items
-                .filter((it): it is { str: string } => "str" in it)
-                .map((it) => it.str)
-                .join(" ")
-                .trim();
-            if (text) pages.push(`## Page ${i}\n\n${text}`);
-        }
-        return pages.join("\n\n");
-    } catch {
-        return "";
-    }
-}
-
-async function extractDocxMarkdown(buf: ArrayBuffer): Promise<string> {
-    try {
-        const mammoth = await import("mammoth");
-        const normalized = await normalizeDocxZipPaths(Buffer.from(buf));
-        const { value: html } = await mammoth.convertToHtml({
-            buffer: normalized,
-        });
-        return html
-            .replace(
-                /<h([1-6])[^>]*>(.*?)<\/h\1>/gi,
-                (_, l, t) => "#".repeat(Number(l)) + " " + t + "\n\n",
-            )
-            .replace(/<strong[^>]*>(.*?)<\/strong>/gi, "**$1**")
-            .replace(/<li[^>]*>(.*?)<\/li>/gi, "- $1\n")
-            .replace(/<p[^>]*>(.*?)<\/p>/gi, "$1\n\n")
-            .replace(/<[^>]+>/g, "")
-            .replace(/&nbsp;/g, " ")
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/\n{3,}/g, "\n\n")
-            .trim();
-    } catch {
-        return "";
-    }
-}
+// bug-007 — extractPdfMarkdown / extractDocxMarkdown / queryGeminiAllColumns
+// moved to lib/tabularJobs.ts.

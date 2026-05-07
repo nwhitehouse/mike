@@ -591,14 +591,98 @@ export async function deleteTabularReview(reviewId: string): Promise<void> {
     await apiRequest(`/tabular-review/${reviewId}`, { method: "DELETE" });
 }
 
-export async function streamTabularGeneration(
+// bug-007 — tabular generate is now a durable job + worker-pool pattern.
+// POST /generate returns immediately with a jobId; the frontend polls
+// GET /jobs/:jobId{,/cells} to surface progress. SSE removed because it
+// died on backend restart / proxy idle / tab close — none of which the
+// new flow is sensitive to.
+
+export type StartTabularGenerateResponse = {
+    jobId: string;
+    totalItems: number;
+    /** true if a pending/running job already existed for this review. */
+    resumed: boolean;
+};
+
+export async function startTabularGenerate(
     reviewId: string,
-): Promise<Response> {
-    const authHeaders = await getAuthHeader();
-    return fetch(`${API_BASE}/tabular-review/${reviewId}/generate`, {
-        method: "POST",
-        headers: { ...authHeaders },
-    });
+): Promise<StartTabularGenerateResponse> {
+    return apiRequest<StartTabularGenerateResponse>(
+        `/tabular-review/${reviewId}/generate`,
+        { method: "POST" },
+    );
+}
+
+export type TabularJobStatus = {
+    id: string;
+    review_id: string;
+    status: "pending" | "running" | "completed" | "failed" | "cancelled";
+    total_items: number;
+    completed_items: number;
+    error_items: number;
+    skipped_items: number;
+    running_items: number;
+    pending_items: number;
+    started_at: string | null;
+    completed_at: string | null;
+    cancel_requested_at: string | null;
+    error: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+export async function getTabularJob(jobId: string): Promise<TabularJobStatus> {
+    return apiRequest<TabularJobStatus>(`/tabular-review/jobs/${jobId}`);
+}
+
+export type TabularJobCellsResponse = {
+    cells: Array<{
+        document_id: string;
+        column_index: number;
+        // Comes back as a parsed object because tabular_cells.content is a
+        // JSONB column. The worker stores JSON.stringify(result) which
+        // Postgres parses on insert; reads return the structured object.
+        content: {
+            summary: string;
+            flag?: "green" | "grey" | "yellow" | "red";
+            reasoning?: string;
+        } | null;
+        status: "pending" | "generating" | "done" | "error";
+    }>;
+    /** Pass back as `since` on the next poll. */
+    lastCompletedAt: string;
+};
+
+export async function getTabularJobCells(
+    jobId: string,
+    since: string,
+): Promise<TabularJobCellsResponse> {
+    const q = new URLSearchParams({ since }).toString();
+    return apiRequest<TabularJobCellsResponse>(
+        `/tabular-review/jobs/${jobId}/cells?${q}`,
+    );
+}
+
+export async function cancelTabularJob(jobId: string): Promise<void> {
+    await apiRequest(`/tabular-review/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+export type ActiveTabularJobResponse = {
+    job: {
+        id: string;
+        status: "pending" | "running";
+        total_items: number;
+        started_at: string | null;
+        created_at: string;
+    } | null;
+};
+
+export async function getActiveTabularJob(
+    reviewId: string,
+): Promise<ActiveTabularJobResponse> {
+    return apiRequest<ActiveTabularJobResponse>(
+        `/tabular-review/reviews/${reviewId}/active-job`,
+    );
 }
 
 export async function streamTabularChat(

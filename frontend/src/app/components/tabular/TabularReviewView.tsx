@@ -15,13 +15,18 @@ import {
 import { HeaderSearchBtn } from "../shared/HeaderSearchBtn";
 
 import {
+    cancelTabularJob,
     clearTabularCells,
-    getTabularReview,
+    getActiveTabularJob,
     getProject,
+    getTabularJob,
+    getTabularJobCells,
+    getTabularReview,
     getTabularReviewPeople,
     regenerateTabularCell,
-    streamTabularGeneration,
+    startTabularGenerate,
     updateTabularReview,
+    type TabularJobStatus,
 } from "@/app/lib/mikeApi";
 import type {
     ColumnConfig,
@@ -66,6 +71,12 @@ export function TRView({ reviewId, projectId }: Props) {
     const [columns, setColumns] = useState<ColumnConfig[]>([]);
     const [loading, setLoading] = useState(true);
     const [generating, setGenerating] = useState(false);
+    // bug-007 — durable-job tabular generate: track the in-flight job so
+    // the polling loop can keep going across remounts and the progress UI
+    // can show "12/200 done" instead of an indeterminate spinner.
+    const [jobStatus, setJobStatus] = useState<TabularJobStatus | null>(null);
+    const activeJobIdRef = useRef<string | null>(null);
+    const pollAbortRef = useRef<{ cancelled: boolean } | null>(null);
     const [savingColumn, setSavingColumn] = useState(false);
     const [savingColumnsConfig, setSavingColumnsConfig] = useState(false);
     const [addColOpen, setAddColOpen] = useState(false);
@@ -250,6 +261,107 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
+    // bug-007 — poll a single job until it reaches a terminal state.
+    // Survives remount because the loop state lives in refs; reentrancy
+    // is prevented via activeJobIdRef + pollAbortRef.
+    async function pollJob(jobId: string) {
+        const myToken = { cancelled: false };
+        // Cancel any prior poller (e.g. user remounted while one was running).
+        if (pollAbortRef.current) pollAbortRef.current.cancelled = true;
+        pollAbortRef.current = myToken;
+        activeJobIdRef.current = jobId;
+
+        const intervalMs = Number(
+            process.env.NEXT_PUBLIC_TABULAR_POLL_MS ?? "1500",
+        );
+        let since = "1970-01-01";
+
+        try {
+            while (!myToken.cancelled) {
+                let snapshot: TabularJobStatus | null = null;
+                try {
+                    snapshot = await getTabularJob(jobId);
+                } catch (err) {
+                    console.warn("[tabular-poll] status fetch failed", err);
+                }
+                if (myToken.cancelled) return;
+                if (snapshot) setJobStatus(snapshot);
+
+                // Pick up cells whose items completed since last poll.
+                try {
+                    const { cells: deltaCells, lastCompletedAt } =
+                        await getTabularJobCells(jobId, since);
+                    if (deltaCells.length > 0) {
+                        setCells((prev) =>
+                            prev.map((c) => {
+                                const update = deltaCells.find(
+                                    (d) =>
+                                        d.document_id === c.document_id &&
+                                        d.column_index === c.column_index,
+                                );
+                                if (!update) return c;
+                                return {
+                                    ...c,
+                                    content: update.content,
+                                    status: update.status as typeof c.status,
+                                };
+                            }),
+                        );
+                    }
+                    since = lastCompletedAt;
+                } catch (err) {
+                    console.warn("[tabular-poll] cells fetch failed", err);
+                }
+
+                if (
+                    snapshot &&
+                    (snapshot.status === "completed" ||
+                        snapshot.status === "cancelled" ||
+                        snapshot.status === "failed")
+                ) {
+                    break;
+                }
+
+                await new Promise((r) => setTimeout(r, intervalMs));
+            }
+        } finally {
+            if (activeJobIdRef.current === jobId) {
+                activeJobIdRef.current = null;
+                setGenerating(false);
+            }
+        }
+    }
+
+    // On mount: detect an in-flight job (started in another tab, or
+    // before a backend restart, or before this user reloaded) and resume
+    // polling. Doesn't kick off a new generate run on its own.
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const { job } = await getActiveTabularJob(reviewId);
+                if (cancelled || !job) return;
+                setGenerating(true);
+                void pollJob(job.id);
+            } catch (err) {
+                console.warn(
+                    "[tabular-poll] active-job lookup failed",
+                    err,
+                );
+            }
+        })();
+        return () => {
+            cancelled = true;
+            if (pollAbortRef.current) {
+                pollAbortRef.current.cancelled = true;
+                pollAbortRef.current = null;
+            }
+        };
+        // Intentional: only run on reviewId change. pollJob's identity is
+        // stable enough for this resume-on-mount check.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [reviewId]);
+
     async function handleGenerate() {
         if (!review || generating) return;
 
@@ -263,7 +375,8 @@ export function TRView({ reviewId, projectId }: Props) {
 
         setGenerating(true);
 
-        // Optimistically set empty/pending/error cells to generating (skip done cells)
+        // Optimistically set empty/pending/error cells to generating (skip done cells).
+        // The polling loop replaces these with the real values as items complete.
         setCells((prev) =>
             documents.flatMap((doc) =>
                 columns.map((col) => {
@@ -295,48 +408,24 @@ export function TRView({ reviewId, projectId }: Props) {
         );
 
         try {
-            const response = await streamTabularGeneration(reviewId);
-            if (!response.body) throw new Error("No body");
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split("\n");
-                buffer = lines.pop() ?? "";
-
-                for (const line of lines) {
-                    if (!line.startsWith("data:")) continue;
-                    const dataStr = line.slice(5).trim();
-                    if (dataStr === "[DONE]") break;
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (data.type === "cell_update") {
-                            setCells((prev) =>
-                                prev.map((c) =>
-                                    c.document_id === data.document_id &&
-                                    c.column_index === data.column_index
-                                        ? {
-                                              ...c,
-                                              content: data.content,
-                                              status: data.status,
-                                          }
-                                        : c,
-                                ),
-                            );
-                        }
-                    } catch {}
-                }
-            }
+            const { jobId } = await startTabularGenerate(reviewId);
+            await pollJob(jobId);
         } catch (err) {
             console.error("Generation failed", err);
-        } finally {
             setGenerating(false);
         }
+    }
+
+    async function handleCancelGenerate() {
+        const jobId = activeJobIdRef.current;
+        if (!jobId) return;
+        try {
+            await cancelTabularJob(jobId);
+        } catch (err) {
+            console.warn("[tabular-cancel] failed", err);
+        }
+        // Don't stop the poller — let it observe the status flip naturally
+        // so the UI updates from the canonical source.
     }
 
     async function handleAddColumn(newColumns: ColumnConfig[]) {
@@ -607,30 +696,46 @@ export function TRView({ reviewId, projectId }: Props) {
                                 <Download className="h-4 w-4" />
                                 Export
                             </button>
-                            <button
-                                onClick={handleGenerate}
-                                disabled={
-                                    generating ||
-                                    columns.length === 0 ||
-                                    documents.length === 0 ||
-                                    savingColumnsConfig
-                                }
-                                className={`flex h-8 items-center justify-center gap-1.5 px-3 text-sm transition-colors ${
-                                    generating ||
-                                    columns.length === 0 ||
-                                    documents.length === 0 ||
-                                    savingColumnsConfig
-                                        ? "text-gray-300 cursor-default"
-                                        : "text-gray-700 hover:text-gray-900 cursor-pointer"
-                                }`}
-                            >
-                                {generating ? (
+                            {generating ? (
+                                <button
+                                    onClick={handleCancelGenerate}
+                                    disabled={!!jobStatus?.cancel_requested_at}
+                                    className={`flex h-8 items-center justify-center gap-1.5 px-3 text-sm transition-colors ${
+                                        jobStatus?.cancel_requested_at
+                                            ? "text-gray-300 cursor-default"
+                                            : "text-gray-700 hover:text-red-600 cursor-pointer"
+                                    }`}
+                                    title={
+                                        jobStatus?.cancel_requested_at
+                                            ? "Cancelling…"
+                                            : "Cancel run"
+                                    }
+                                >
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
+                                    {jobStatus
+                                        ? `${jobStatus.completed_items + jobStatus.error_items + jobStatus.skipped_items}/${jobStatus.total_items}${jobStatus.cancel_requested_at ? " — cancelling" : ""}`
+                                        : "Running…"}
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleGenerate}
+                                    disabled={
+                                        columns.length === 0 ||
+                                        documents.length === 0 ||
+                                        savingColumnsConfig
+                                    }
+                                    className={`flex h-8 items-center justify-center gap-1.5 px-3 text-sm transition-colors ${
+                                        columns.length === 0 ||
+                                        documents.length === 0 ||
+                                        savingColumnsConfig
+                                            ? "text-gray-300 cursor-default"
+                                            : "text-gray-700 hover:text-gray-900 cursor-pointer"
+                                    }`}
+                                >
                                     <Play className="h-4 w-4" />
-                                )}
-                                {generating ? "Running…" : "Run"}
-                            </button>
+                                    Run
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>

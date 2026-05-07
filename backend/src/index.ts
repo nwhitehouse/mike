@@ -15,6 +15,11 @@ import {
   requestErrorHandler,
   securityHeaders,
 } from "./lib/httpSecurity";
+import {
+  TabularWorkerPool,
+  readWorkerPoolConfig,
+} from "./lib/tabularJobs";
+import { createServerSupabase } from "./lib/supabase";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -48,6 +53,31 @@ app.use("/download", downloadsRouter);
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use(requestErrorHandler());
 
-app.listen(PORT, () => {
-  console.log(`Olava backend running on port ${PORT}`);
+// bug-007 — In-process worker pool for tabular generate jobs. Started
+// after listen() so the HTTP server is ready when the first item gets
+// claimed; on SIGTERM/SIGINT we stop accepting new claims and let the
+// in-flight items run their lease out (the next worker that comes up
+// after restart will reclaim them via the SKIP LOCKED query).
+const tabularPool = new TabularWorkerPool({
+  ...readWorkerPoolConfig(),
+  dbFactory: () => createServerSupabase(),
 });
+
+const server = app.listen(PORT, () => {
+  console.log(`Olava backend running on port ${PORT}`);
+  tabularPool.start();
+});
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[${signal}] graceful shutdown — stopping worker pool…`);
+  await tabularPool.stop();
+  server.close(() => process.exit(0));
+  // Hard-exit timeout so a hung connection doesn't block deploy. Items
+  // mid-flight get reclaimed by the next worker after lease expiry.
+  setTimeout(() => process.exit(0), 5_000).unref();
+};
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
