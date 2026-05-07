@@ -27,6 +27,11 @@ import {
     queryGemini,
     createGenerateJob,
 } from "../lib/tabularJobs";
+// feat-024 — RAG over the docs in a tabular review. The chat route
+// embeds the user message and pulls back the top-K nearest chunks so
+// answers can quote across docs that don't have a dedicated column.
+import { embedQuery } from "../lib/embedding";
+import { searchChunks, type RagHit } from "../lib/ragSearch";
 
 export const tabularRouter = Router();
 
@@ -1587,6 +1592,7 @@ function buildTabularMessages(
     messages: ChatMessage[],
     tabularStore: TabularCellStore,
     reviewTitle: string,
+    ragHits: RagHit[] = [],
 ): unknown[] {
     const docList = tabularStore.documents
         .map((d, i) => `- ROW:${i} "${d.filename}"`)
@@ -1594,6 +1600,39 @@ function buildTabularMessages(
     const colList = tabularStore.columns
         .map((c, i) => `- COL:${i} "${c.name}"`)
         .join("\n");
+
+    // feat-024 — slot retrieved passages into the system prompt. Each
+    // passage carries the doc's ROW index (so the LLM can produce the
+    // same numbered [n] / <CITATIONS> shape as cell citations) plus
+    // a page span for chip rendering when the LLM quotes verbatim.
+    const docIndexById = new Map(
+        tabularStore.documents.map((d, i) => [d.id, i]),
+    );
+    let ragBlock = "";
+    if (ragHits.length > 0) {
+        const lines = ragHits
+            .map((h) => {
+                const rowIdx = docIndexById.get(h.documentId);
+                if (rowIdx === undefined) return null;
+                const pageHint =
+                    h.pageStart && h.pageEnd && h.pageStart === h.pageEnd
+                        ? `page ${h.pageStart}`
+                        : h.pageStart && h.pageEnd
+                          ? `pages ${h.pageStart}-${h.pageEnd}`
+                          : "";
+                const header = pageHint
+                    ? `<retrieved_passage row="${rowIdx}" ${pageHint.replace(" ", "=")}">`
+                    : `<retrieved_passage row="${rowIdx}">`;
+                return `${header}\n${h.content.trim()}\n</retrieved_passage>`;
+            })
+            .filter((s): s is string => s !== null);
+        if (lines.length > 0) {
+            ragBlock = `
+
+RETRIEVED PASSAGES (semantic search hits across documents in this review — use these to ground answers when the question isn't covered by a column):
+${lines.join("\n\n")}`;
+        }
+    }
 
     const systemContent = `You are Olava, an AI legal assistant. You are helping with the tabular review titled "${reviewTitle}".
 
@@ -1604,7 +1643,7 @@ DOCUMENTS (rows):
 ${docList || "- (none)"}
 
 COLUMNS (fields):
-${colList || "- (none)"}
+${colList || "- (none)"}${ragBlock}
 
 TABULAR CITATION INSTRUCTIONS:
 When you reference specific cell content, place a numbered marker [1], [2], etc. inline in your prose at the point of reference.
@@ -1622,6 +1661,7 @@ Rules:
 - col_index and row_index are 0-based (matching the COL/ROW numbers listed above)
 - Only cite cells you have read via read_table_cells
 - quote should be verbatim text from the cell's summary
+- When citing from a RETRIEVED PASSAGE, omit col_index (the passage isn't a cell — set col_index to -1) but keep row_index pointing at the source doc's ROW
 - Omit <CITATIONS> if you make no citations
 - Do not fabricate cell content
 - Answer in clear, concise prose. You may use markdown formatting.`;
@@ -1762,10 +1802,29 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
         });
     }
 
+    // feat-024 — embed the user message and retrieve top-K chunks across
+    // every accessible doc in this review. Failures are logged and the
+    // chat falls back to the cell-only system prompt.
+    let ragHits: RagHit[] = [];
+    if (process.env.OPENAI_API_KEY && accessibleDocIds.size > 0) {
+        try {
+            const queryEmbedding = await embedQuery(lastUser.content);
+            ragHits = await searchChunks({
+                db,
+                documentIds: [...accessibleDocIds],
+                queryEmbedding,
+                k: 12,
+            });
+        } catch (err) {
+            console.warn("[tabular/chat] RAG retrieval failed:", err);
+        }
+    }
+
     const apiMessages = buildTabularMessages(
         messages,
         tabularStore,
         review.title || "Untitled Review",
+        ragHits,
     );
 
     res.setHeader("Content-Type", "text/event-stream");

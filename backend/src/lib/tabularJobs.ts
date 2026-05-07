@@ -407,6 +407,49 @@ export async function createGenerateJob(args: {
 }
 
 /**
+ * feat-024 — create an embed_document job. One item per documentId; the
+ * worker pool processes them in parallel (TABULAR_GENERATE_CONCURRENCY).
+ * review_id is null because embedding is per-doc, not per-review.
+ */
+export async function createEmbedDocumentJob(args: {
+    db: Db;
+    userId: string;
+    documentIds: string[];
+}): Promise<{ jobId: string; totalItems: number } | { error: string }> {
+    const { db, userId, documentIds } = args;
+    if (documentIds.length === 0) {
+        return { error: "No documents to embed" };
+    }
+    const { data: job, error: jobErr } = await db
+        .from("tabular_jobs")
+        .insert({
+            review_id: null,
+            user_id: userId,
+            status: "pending",
+            total_items: documentIds.length,
+            job_type: "embed_document",
+        })
+        .select("id")
+        .single();
+    if (jobErr || !job) {
+        return { error: jobErr?.message ?? "Failed to create embed job" };
+    }
+    const itemRows = documentIds.map((document_id) => ({
+        job_id: job.id as string,
+        document_id,
+        status: "pending" as const,
+    }));
+    const { error: itemsErr } = await db
+        .from("tabular_job_items")
+        .insert(itemRows);
+    if (itemsErr) {
+        await db.from("tabular_jobs").delete().eq("id", job.id);
+        return { error: itemsErr.message };
+    }
+    return { jobId: job.id as string, totalItems: documentIds.length };
+}
+
+/**
  * Atomic claim. Wraps the claim_tabular_job_item RPC (migration 005).
  * Returns the claimed item or null when no work is available. SKIP LOCKED
  * means multiple workers — and multiple Express instances if we ever
@@ -502,7 +545,7 @@ export async function processOneJobItem(
     const { data: jobRow } = await db
         .from("tabular_jobs")
         .select(
-            "id, review_id, user_id, status, cancel_requested_at, total_items",
+            "id, review_id, user_id, status, cancel_requested_at, total_items, job_type",
         )
         .eq("id", item.job_id)
         .single();
@@ -512,12 +555,21 @@ export async function processOneJobItem(
     }
     const job = jobRow as {
         id: string;
-        review_id: string;
+        review_id: string | null;
         user_id: string;
         status: string;
         cancel_requested_at: string | null;
         total_items: number;
+        job_type: string;
     };
+
+    // feat-024 — dispatch on job_type. tabular_generate (bug-007) is the
+    // original processor; embed_document (feat-024) chunks a doc and
+    // writes its embeddings. The job-lifecycle bookkeeping (pending →
+    // running, cancel-respect, finalize) is shared.
+    if (job.job_type === "embed_document") {
+        return processEmbedDocumentItem(db, item, job, t0);
+    }
 
     // Move job from 'pending' to 'running' on first claim. Best-effort —
     // a parallel worker might already have done this; the WHERE filter
@@ -746,6 +798,156 @@ export async function processOneJobItem(
     console.log(
         `[tabular-worker] doc=${doc.id} columns=${receivedColumns.size}/${columnsToProcess.length} errors=${perItemErrors} took=${Date.now() - t0}ms`,
     );
+}
+
+/**
+ * feat-024 — process an embed_document item.
+ *
+ * Each item is one document. We download the active version, extract
+ * markdown, chunk it (lib/documentChunker.ts), embed each chunk via
+ * OpenAI (lib/embedding.ts), and upsert into document_chunks. Old
+ * chunks for this doc are deleted first so re-embedding doesn't leave
+ * stale rows behind.
+ *
+ * On any irrecoverable error the item is marked errored — the user
+ * can retry by re-enqueuing. Transient errors (rate limits, timeouts)
+ * are retried inside embedBatch with exponential backoff before
+ * giving up.
+ */
+async function processEmbedDocumentItem(
+    db: Db,
+    item: ClaimedJobItem,
+    job: { id: string; status: string; cancel_requested_at: string | null },
+    t0: number,
+): Promise<void> {
+    if (job.status === "pending") {
+        await db
+            .from("tabular_jobs")
+            .update({
+                status: "running",
+                started_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+            })
+            .eq("id", job.id)
+            .eq("status", "pending");
+    }
+    if (job.cancel_requested_at) {
+        await db
+            .from("tabular_job_items")
+            .update({
+                status: "skipped",
+                completed_at: new Date().toISOString(),
+                lease_expires_at: null,
+            })
+            .eq("id", item.id);
+        await db
+            .from("tabular_jobs")
+            .update({ updated_at: new Date().toISOString() })
+            .eq("id", job.id);
+        await maybeFinalizeJob(db, job.id);
+        return;
+    }
+
+    const { data: docRow } = await db
+        .from("documents")
+        .select("id, filename, file_type")
+        .eq("id", item.document_id)
+        .single();
+    if (!docRow) {
+        await db
+            .from("tabular_job_items")
+            .update({
+                status: "skipped",
+                completed_at: new Date().toISOString(),
+                lease_expires_at: null,
+                error: "Document deleted",
+            })
+            .eq("id", item.id);
+        await maybeFinalizeJob(db, job.id);
+        return;
+    }
+    const doc = docRow as { id: string; filename: string; file_type: string };
+
+    try {
+        const active = await loadActiveVersion(doc.id, db);
+        if (!active) {
+            await markItemError(db, item.id, "No active version to embed");
+            await maybeFinalizeJob(db, job.id);
+            return;
+        }
+        const buf = await downloadFile(active.storage_path);
+        if (!buf) {
+            await markItemError(db, item.id, "Failed to download active version");
+            await maybeFinalizeJob(db, job.id);
+            return;
+        }
+        const markdown =
+            doc.file_type === "pdf"
+                ? await extractPdfMarkdown(buf)
+                : await extractDocxMarkdown(buf);
+        if (!markdown.trim()) {
+            await markItemError(db, item.id, "Empty document text");
+            await maybeFinalizeJob(db, job.id);
+            return;
+        }
+
+        // Lazy import so the worker module's load-time dependencies stay
+        // small — embedding.ts pulls in nothing exotic but the chunker
+        // we import statically below.
+        const { chunkDocument } = await import("./documentChunker");
+        const { embedBatch, formatVectorLiteral } = await import("./embedding");
+
+        const chunks = chunkDocument(markdown);
+        if (chunks.length === 0) {
+            await markItemError(db, item.id, "No chunks produced");
+            await maybeFinalizeJob(db, job.id);
+            return;
+        }
+
+        // Wipe existing chunks for this doc first so re-embed produces
+        // a clean set instead of compounding.
+        await db.from("document_chunks").delete().eq("document_id", doc.id);
+
+        // Embed in batches inside embedBatch (it self-batches at 100).
+        const vectors = await embedBatch(chunks.map((c) => c.content));
+        const rows = chunks.map((c, idx) => ({
+            document_id: doc.id,
+            chunk_index: c.chunkIndex,
+            page_start: c.pageStart,
+            page_end: c.pageEnd,
+            content: c.content,
+            embedding: formatVectorLiteral(vectors[idx]),
+        }));
+
+        // Insert in slices to keep the request body modest.
+        for (let i = 0; i < rows.length; i += 50) {
+            const slice = rows.slice(i, i + 50);
+            const { error } = await db.from("document_chunks").insert(slice);
+            if (error) {
+                throw new Error(
+                    `[embed-worker] insert failed: ${error.message}`,
+                );
+            }
+        }
+
+        await markItemCompleted(db, item.id);
+        await db
+            .from("tabular_jobs")
+            .update({ updated_at: new Date().toISOString() })
+            .eq("id", job.id);
+        await maybeFinalizeJob(db, job.id);
+        console.log(
+            `[embed-worker] doc=${doc.id} chunks=${chunks.length} took=${Date.now() - t0}ms`,
+        );
+    } catch (err) {
+        console.error(`[embed-worker] doc=${doc.id} failed`, err);
+        await markItemError(db, item.id, String((err as Error).message ?? err));
+        await db
+            .from("tabular_jobs")
+            .update({ updated_at: new Date().toISOString() })
+            .eq("id", job.id);
+        await maybeFinalizeJob(db, job.id);
+    }
 }
 
 async function markItemCompleted(db: Db, itemId: string): Promise<void> {

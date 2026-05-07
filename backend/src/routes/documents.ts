@@ -64,6 +64,67 @@ documentsRouter.post(
   },
 );
 
+// POST /single-documents/embed-backfill
+//
+// feat-024 — admin one-shot to embed every accessible doc that doesn't
+// yet have chunks in document_chunks. Idempotent: docs already chunked
+// are skipped (the worker also wipes-and-reinserts, so re-running is
+// safe but wasteful). Gated by env flag ENABLE_EMBED_BACKFILL=true so
+// it can't be hit accidentally on prod before the operator is ready.
+documentsRouter.post("/embed-backfill", requireAuth, async (_req, res) => {
+  if (process.env.ENABLE_EMBED_BACKFILL !== "true") {
+    return void res
+      .status(403)
+      .json({ detail: "Set ENABLE_EMBED_BACKFILL=true to use this endpoint." });
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return void res
+      .status(500)
+      .json({ detail: "OPENAI_API_KEY is not set." });
+  }
+
+  const userId = res.locals.userId as string;
+  const db = createServerSupabase();
+
+  // Find docs the caller has access to that don't yet have chunks.
+  // Service-role would let us cover everyone's docs; we deliberately
+  // scope to caller-accessible to keep this operator-friendly without
+  // bypassing auth model.
+  const { data: docs } = await db
+    .from("documents")
+    .select("id");
+  const allDocIds = ((docs ?? []) as { id: string }[]).map((d) => d.id);
+  if (allDocIds.length === 0) {
+    return void res.json({ enqueued: 0, totalAccessible: 0 });
+  }
+  const { data: chunked } = await db
+    .from("document_chunks")
+    .select("document_id")
+    .in("document_id", allDocIds);
+  const chunkedSet = new Set(
+    ((chunked ?? []) as { document_id: string }[]).map((c) => c.document_id),
+  );
+  const missing = allDocIds.filter((id) => !chunkedSet.has(id));
+  if (missing.length === 0) {
+    return void res.json({ enqueued: 0, totalAccessible: allDocIds.length });
+  }
+
+  const { createEmbedDocumentJob } = await import("../lib/tabularJobs");
+  const result = await createEmbedDocumentJob({
+    db,
+    userId,
+    documentIds: missing,
+  });
+  if ("error" in result) {
+    return void res.status(500).json({ detail: result.error });
+  }
+  res.json({
+    enqueued: result.totalItems,
+    totalAccessible: allDocIds.length,
+    jobId: result.jobId,
+  });
+});
+
 // DELETE /single-documents/:documentId
 documentsRouter.delete("/:documentId", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
@@ -982,6 +1043,30 @@ async function handleDocumentUpload(
         documentId: docId,
         storagePath: pdfStoragePath,
       });
+    }
+
+    // feat-024 — enqueue an embed_document job. The bug-007 worker pool
+    // picks it up, chunks the markdown, embeds via OpenAI, and writes
+    // to document_chunks. Failures don't block the upload response.
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        const { createEmbedDocumentJob } = await import(
+          "../lib/tabularJobs"
+        );
+        const result = await createEmbedDocumentJob({
+          db,
+          userId,
+          documentIds: [docId],
+        });
+        if ("error" in result) {
+          console.warn(
+            `[upload] embed-job enqueue failed for ${docId}:`,
+            result.error,
+          );
+        }
+      } catch (err) {
+        console.warn(`[upload] embed-job enqueue threw for ${docId}:`, err);
+      }
     }
 
     const { data: updated } = await db
