@@ -10,7 +10,7 @@ import {
     X,
 } from "lucide-react";
 import type { ColumnConfig, MikeDocument, TabularCell } from "../shared/types";
-import { preprocessCitations } from "./citation-utils";
+import { extractProsePageRefs, preprocessCitations } from "./citation-utils";
 import { CellCitationChips } from "./CellCitationChips";
 import { CellKeywordChips } from "./CellKeywordChips";
 import { DocView } from "../shared/DocView";
@@ -88,10 +88,22 @@ export function TRDocDetailView({
         preprocessCitations(summary);
     const { processed: reasoningText, citations: reasoningCitations } =
         preprocessCitations(reasoning);
-    const allCitations = useMemo(
+    // feat-022 — fallback for cells where the LLM wrote "(Page 5)" in prose
+    // instead of emitting a [[page:5||quote:...]] marker. allCitations
+    // includes both kinds: structured first (so existing [N] superscript
+    // numbering stays stable), prose-extracted appended at the end.
+    const structuredCitations = useMemo(
         () => [...summaryCitations, ...reasoningCitations],
         [summaryCitations, reasoningCitations],
     );
+    const allCitations = useMemo(() => {
+        const usedPages = new Set(structuredCitations.map((c) => c.page));
+        const prose = extractProsePageRefs(
+            `${summary}\n${reasoning}`,
+            usedPages,
+        );
+        return [...structuredCitations, ...prose];
+    }, [structuredCitations, summary, reasoning]);
     const [activeCitationIdx, setActiveCitationIdx] = useState(0);
     const activeCitation = allCitations[activeCitationIdx];
 
