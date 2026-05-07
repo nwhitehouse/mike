@@ -2684,12 +2684,23 @@ export async function runLLMStream(params: {
     //
     // v1 scope: only enabled when the chat has exactly one PDF in scope.
     // Multi-doc disambiguation ("[N] from which doc?") is a follow-up.
+    //
+    // DISABLED BY DEFAULT (bug-005). Per-call verifier latency observed
+    // 12–17s on Olava-extract; we used to await all in-flight at end-of-
+    // turn and added that wait to time-to-[DONE]. Empirically the model
+    // emits a clean <CITATIONS> block on its own most of the time, so the
+    // verifier is mostly redundant work. Re-enable per-deploy via env var
+    // OLAVA_VERIFIER=on if we observe the model regressing on the JSON
+    // tail. All supporting code (verifyCitation, fireVerifier, marker
+    // detection) is preserved so flipping the flag is the only change.
+    const verifierEnabled =
+        (process.env.OLAVA_VERIFIER ?? "").trim().toLowerCase() === "on";
     const pdfsInScope = Array.from(docStore.entries()).filter(
         ([, info]) => info.file_type === "pdf",
     );
     let verifierDocId: string | null = null;
     let verifierDocText = "";
-    if (pdfsInScope.length === 1) {
+    if (verifierEnabled && pdfsInScope.length === 1) {
         const [docId, info] = pdfsInScope[0];
         try {
             const buf = await downloadFile(info.storage_path);
