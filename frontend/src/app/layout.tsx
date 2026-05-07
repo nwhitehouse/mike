@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, EB_Garamond } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 
@@ -66,6 +67,7 @@ export default function RootLayout({
                 className={`${inter.variable} ${ebGaramond.variable} font-sans antialiased`}
             >
                 <Providers>{children}</Providers>
+                <Analytics />
             </body>
         </html>
     );
