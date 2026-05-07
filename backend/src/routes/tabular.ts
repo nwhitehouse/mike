@@ -1850,13 +1850,21 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
 
 function parseCellContent(
     raw: unknown,
-): { summary: string; flag?: string; reasoning?: string } | null {
+):
+    | {
+          summary: string;
+          flag?: string;
+          reasoning?: string;
+          keywords?: string[];
+      }
+    | null {
     if (!raw) return null;
     if (typeof raw === "object" && raw !== null && "summary" in raw) {
         const c = raw as {
             summary?: unknown;
             flag?: unknown;
             reasoning?: unknown;
+            keywords?: unknown;
         };
         return {
             summary: String(c.summary ?? ""),
@@ -1866,6 +1874,11 @@ function parseCellContent(
                 ? (c.flag as string)
                 : undefined,
             reasoning: typeof c.reasoning === "string" ? c.reasoning : "",
+            // feat-022 — preserve keywords through the response. Without
+            // this the worker stores them but the GET /tabular-review/:id
+            // endpoint silently drops them, leaving the keyword chip row
+            // empty for every cell.
+            keywords: sanitiseKeywordsForResponse(c.keywords),
         };
     }
     if (typeof raw === "string") {
@@ -1875,6 +1888,7 @@ function parseCellContent(
                 value?: unknown;
                 flag?: unknown;
                 reasoning?: unknown;
+                keywords?: unknown;
             };
             return {
                 summary: String(p.summary ?? p.value ?? "").trim(),
@@ -1884,12 +1898,28 @@ function parseCellContent(
                     ? (p.flag as string)
                     : undefined,
                 reasoning: typeof p.reasoning === "string" ? p.reasoning : "",
+                keywords: sanitiseKeywordsForResponse(p.keywords),
             };
         } catch {
             return { summary: raw, flag: "grey", reasoning: "" };
         }
     }
     return null;
+}
+
+// feat-022 — keep this in sync with sanitiseKeywords in lib/tabularJobs.ts.
+// Defensive on read so legacy cells (with no keywords) and corrupt rows
+// don't poison the response.
+function sanitiseKeywordsForResponse(raw: unknown): string[] | undefined {
+    if (!Array.isArray(raw)) return undefined;
+    const out: string[] = [];
+    for (const item of raw) {
+        if (typeof item === "string" && item.trim().length >= 2) {
+            out.push(item.trim().slice(0, 60));
+            if (out.length >= 5) break;
+        }
+    }
+    return out.length > 0 ? out : undefined;
 }
 
 // bug-007 — queryGemini, queryGeminiAllColumns, extractPdfMarkdown,
