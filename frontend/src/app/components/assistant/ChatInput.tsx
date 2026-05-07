@@ -334,7 +334,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             />
                             <button
                                 type="button"
-                                className="relative bg-gradient-to-b from-neutral-700 to-black text-primary-foreground rounded-[10px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border border-white/30 active:enabled:scale-95 transition-all duration-150"
+                                className="relative bg-gradient-to-b from-neutral-700 to-black text-primary-foreground rounded-[10px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border border-white/30 active:enabled:scale-95 transition-all duration-150 dark:from-neutral-100 dark:to-white dark:disabled:from-neutral-300 dark:disabled:to-neutral-200 dark:border-foreground/20"
                                 onClick={handleActionClick}
                                 disabled={
                                     !isLoading &&

@@ -539,7 +539,14 @@ export function WorkflowList() {
                                                 alt=""
                                                 width={14}
                                                 height={14}
-                                                style={{ display: "block" }}
+                                                className="block dark:hidden"
+                                            />
+                                            <img
+                                                src="/onit-mark-white.svg"
+                                                alt=""
+                                                width={14}
+                                                height={14}
+                                                className="hidden dark:block"
                                             />
                                             Olava
                                         </span>

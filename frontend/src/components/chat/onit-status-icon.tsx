@@ -102,6 +102,15 @@ export function OnitStatusIcon({
                     width={size}
                     height={size}
                     priority
+                    className="block dark:hidden"
+                />
+                <Image
+                    src="/onit-mark-white.svg"
+                    alt=""
+                    width={size}
+                    height={size}
+                    priority
+                    className="hidden dark:block"
                 />
             </span>
         </span>

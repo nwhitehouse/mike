@@ -131,7 +131,14 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 alt=""
                                 width={22}
                                 height={22}
-                                style={{ display: "block" }}
+                                className="block dark:hidden"
+                            />
+                            <img
+                                src="/onit-mark-white.svg"
+                                alt=""
+                                width={22}
+                                height={22}
+                                className="hidden dark:block"
                             />
                             <span
                                 className={`text-2xl font-light font-serif ${

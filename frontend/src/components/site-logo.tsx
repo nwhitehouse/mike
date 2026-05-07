@@ -42,7 +42,14 @@ export function SiteLogo({
                 alt=""
                 width={iconSizes[size]}
                 height={iconSizes[size]}
-                style={{ display: "block" }}
+                className="block dark:hidden"
+            />
+            <img
+                src="/onit-mark-white.svg"
+                alt=""
+                width={iconSizes[size]}
+                height={iconSizes[size]}
+                className="hidden dark:block"
             />
             <span>Olava</span>
         </h1>

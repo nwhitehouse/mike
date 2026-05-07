@@ -66,7 +66,14 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                                 alt=""
                                 width={ICON_SIZE}
                                 height={ICON_SIZE}
-                                style={{ display: "block" }}
+                                className="block dark:hidden"
+                            />
+                            <img
+                                src="/onit-mark-white.svg"
+                                alt=""
+                                width={ICON_SIZE}
+                                height={ICON_SIZE}
+                                className="hidden dark:block"
                             />
                         </div>
                         <h1
