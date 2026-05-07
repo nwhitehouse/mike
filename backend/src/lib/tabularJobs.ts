@@ -43,6 +43,14 @@ export type CellResult = {
     summary: string;
     flag: "green" | "grey" | "yellow" | "red";
     reasoning: string;
+    /**
+     * feat-022 — short doc-search terms a reviewer would use to verify
+     * this cell against the source document. Distinct from `summary`
+     * citations (which are anchored to a specific page). Rendered as
+     * clickable chips that drive the doc-viewer search input. Empty
+     * array if not applicable.
+     */
+    keywords?: string[];
 };
 
 export type Column = {
@@ -170,11 +178,13 @@ export async function queryGemini(
     const fullPrompt = `${columnPrompt}${suffix} If not found, state "Not Found". Leave all reasoning and explanation in the "reasoning" field only.`;
 
     const EXTRACTION_SYSTEM = `You are a legal document analyst. Return ONLY valid JSON:
-{"summary": string, "flag": "green"|"grey"|"yellow"|"red", "reasoning": string}
+{"summary": string, "flag": "green"|"grey"|"yellow"|"red", "reasoning": string, "keywords": string[]}
 
 The "summary" and "reasoning" field values may use markdown formatting (bullets, bold, italics, etc.) — the values are still plain JSON strings (escape newlines as \\n), but the text inside will be rendered as markdown in the UI.
 
-The "summary" field must contain only the extracted value with inline citations — no explanation or reasoning. Every factual claim in "summary" must be followed immediately by a citation in the format [[page:N||quote:exact quoted text]], where N is the page number and the quote is a short verbatim excerpt (≤ 25 words). The quote must be narrowly scoped to the specific claim it supports — extract only the exact words that support that statement, not the surrounding sentence or paragraph. Do not have multiple claims share the same long quote; if two different statements need different evidence, give each its own short, narrowly-scoped quote. All reasoning and explanation belongs in "reasoning" only, which may also contain citations.`;
+The "summary" field must contain only the extracted value with inline citations — no explanation or reasoning. Every factual claim in "summary" must be followed immediately by a citation in the format [[page:N||quote:exact quoted text]], where N is the page number and the quote is a short verbatim excerpt (≤ 25 words). The quote must be narrowly scoped to the specific claim it supports — extract only the exact words that support that statement, not the surrounding sentence or paragraph. Do not have multiple claims share the same long quote; if two different statements need different evidence, give each its own short, narrowly-scoped quote. All reasoning and explanation belongs in "reasoning" only, which may also contain citations.
+
+The "keywords" field is an array of 3–5 short, distinct phrases (each ≤4 words) a reviewer could type into a doc-search box to verify this answer in the source document. Prefer terms that appear verbatim or near-verbatim in the document — section names, defined terms, key clause-anchor phrases. Skip generic words ("provision", "clause", "agreement") and skip anything that just restates the column name. If you cannot suggest useful search terms, return an empty array.`;
 
     let raw: string;
     try {
@@ -197,6 +207,7 @@ The "summary" field must contain only the extracted value with inline citations 
             value?: unknown;
             flag?: unknown;
             reasoning?: unknown;
+            keywords?: unknown;
         };
         return {
             summary:
@@ -208,6 +219,7 @@ The "summary" field must contain only the extracted value with inline citations 
                 ? (parsed.flag as "green")
                 : "grey",
             reasoning: String(parsed.reasoning ?? ""),
+            keywords: sanitiseKeywords(parsed.keywords),
         };
     } catch {
         return raw.trim()
@@ -215,9 +227,31 @@ The "summary" field must contain only the extracted value with inline citations 
                   summary: raw.trim().slice(0, 500),
                   flag: "grey" as const,
                   reasoning: "",
+                  keywords: [],
               }
             : null;
     }
+}
+
+// feat-022 — defensive parser for the LLM's keywords array. Drops empty
+// strings, truncates over-long phrases, dedupes case-insensitively, caps
+// at 5. Junk-resistant so a misbehaving model can't leak random tokens
+// into the cell side panel.
+function sanitiseKeywords(raw: unknown): string[] {
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of raw) {
+        if (typeof item !== "string") continue;
+        const trimmed = item.trim().slice(0, 60);
+        if (trimmed.length < 2) continue;
+        const key = trimmed.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(trimmed);
+        if (out.length >= 5) break;
+    }
+    return out;
 }
 
 /** Multi-column extraction for one document. Streams one result per column. */
@@ -242,12 +276,13 @@ export async function queryGeminiAllColumns(
 For each column, output exactly one minified JSON object on its own line (no line breaks inside the JSON), then a newline. Process columns in order and output each result as soon as you finish it.
 
 Line format:
-{"column_index": <N>, "summary": <string>, "flag": <"green"|"grey"|"yellow"|"red">, "reasoning": <string>}
+{"column_index": <N>, "summary": <string>, "flag": <"green"|"grey"|"yellow"|"red">, "reasoning": <string>, "keywords": [<string>, ...]}
 
 Rules:
 - "summary": the extracted value with inline citations [[page:N||quote:verbatim excerpt ≤25 words]] after every factual claim. No explanation or reasoning here. Quotes must be narrowly scoped to the specific claim — extract only the exact supporting words, not the full surrounding sentence. Do not reuse one long quote across multiple statements; give each claim its own short, precise quote.
 - "flag": green = standard/favorable, yellow = needs attention, red = problematic/unfavorable, grey = neutral/not found
 - "reasoning": brief explanation of the extraction
+- "keywords": 3–5 short, distinct phrases (each ≤4 words) a reviewer could type into a doc-search box to verify this answer. Prefer terms that appear verbatim or near-verbatim in the document — section names, defined terms, key clause-anchor phrases. Skip generic words ("provision", "clause", "agreement") and skip anything that just restates the column name. If you cannot suggest useful search terms, return an empty array.
 - The "summary" and "reasoning" string VALUES may use markdown (bullets, bold, italics, etc.) — escape newlines as \\n inside the JSON string. This markdown is rendered in the UI.
 - Output ONLY the JSON lines themselves. Do NOT wrap the response in markdown code fences (e.g. \`\`\`json), and do not add any preamble or summary.`;
 
@@ -265,6 +300,7 @@ Rules:
                 summary?: unknown;
                 flag?: unknown;
                 reasoning?: unknown;
+                keywords?: unknown;
             };
             if (typeof parsed.column_index !== "number") return;
             const col = columns.find((c) => c.index === parsed.column_index);
@@ -277,6 +313,7 @@ Rules:
                     ? (parsed.flag as CellResult["flag"])
                     : "grey",
                 reasoning: String(parsed.reasoning ?? ""),
+                keywords: sanitiseKeywords(parsed.keywords),
             });
         } catch {
             /* malformed line — skip */

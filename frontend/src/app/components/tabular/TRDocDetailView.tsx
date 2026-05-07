@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import type { ColumnConfig, MikeDocument, TabularCell } from "../shared/types";
 import { preprocessCitations } from "./citation-utils";
+import { CellCitationChips } from "./CellCitationChips";
+import { CellKeywordChips } from "./CellKeywordChips";
 import { DocView } from "../shared/DocView";
 import { DocxView } from "../shared/DocxView";
 import { MarkdownContent } from "./TRSidePanel";
@@ -513,6 +515,37 @@ export function TRDocDetailView({
                                             {reasoningText}
                                         </MarkdownContent>
                                     </div>
+                                )}
+                                {/* feat-022 — clickable citation + keyword
+                                    chips below the explanation. Citations
+                                    jump the doc viewer to the cited page;
+                                    keywords drive the doc-search input. */}
+                                {!editing && (
+                                    <>
+                                        <CellCitationChips
+                                            citations={allCitations}
+                                            onJump={(c) => {
+                                                const idx = allCitations.findIndex(
+                                                    (sc) =>
+                                                        sc.page === c.page &&
+                                                        sc.quote === c.quote,
+                                                );
+                                                if (idx >= 0) {
+                                                    setActiveCitationIdx(idx);
+                                                    setSearchTerm("");
+                                                }
+                                            }}
+                                        />
+                                        <CellKeywordChips
+                                            keywords={
+                                                selectedCell?.content
+                                                    ?.keywords ?? []
+                                            }
+                                            onSearch={(kw) => {
+                                                setSearchTerm(kw);
+                                            }}
+                                        />
+                                    </>
                                 )}
                             </div>
                         )}

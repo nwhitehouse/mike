@@ -310,6 +310,10 @@ export interface TabularCell {
     summary: string;
     flag?: "green" | "grey" | "yellow" | "red";
     reasoning?: string;
+    // feat-022 — short doc-search terms a reviewer can click to verify
+    // the cell against the source. 3–5 items per cell post-feat-022;
+    // legacy cells before this story have no keywords.
+    keywords?: string[];
   } | null;
   status: "pending" | "generating" | "done" | "error";
   created_at: string;
