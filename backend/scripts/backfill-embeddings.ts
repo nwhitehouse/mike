@@ -42,9 +42,15 @@ async function main() {
         file_type: string;
     }[];
 
+    // Bump the row cap — supabase-js's PostgREST client defaults to 1000
+    // rows, but document_chunks easily exceeds that on a real review.
+    // Underestimating means already-chunked docs slip through and the
+    // script tries to re-insert, hitting the (document_id, chunk_index)
+    // unique constraint.
     const { data: chunked } = await db
         .from("document_chunks")
-        .select("document_id");
+        .select("document_id")
+        .limit(100000);
     const chunkedSet = new Set(
         ((chunked ?? []) as { document_id: string }[]).map((c) => c.document_id),
     );
@@ -89,6 +95,10 @@ async function main() {
                 failed++;
                 continue;
             }
+            // Wipe-then-insert mirrors the worker's processEmbedDocumentItem
+            // shape: handles partial-state docs from prior failed runs,
+            // and means the script is idempotent for re-runs.
+            await db.from("document_chunks").delete().eq("document_id", doc.id);
             const vectors = await embedBatch(chunks.map((c) => c.content));
             const rows = chunks.map((c, idx) => ({
                 document_id: doc.id,
