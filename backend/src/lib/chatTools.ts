@@ -23,6 +23,7 @@ import {
 } from "./llm";
 import { verifyCitation } from "./research/citationVerifier";
 import { recordEvent } from "./agentEvents";
+import { LoopController, escalationNote } from "./loopController";
 
 // Olava sometimes formats inline citations as Unicode superscripts (¹, ²,
 // ¹², ²³) instead of [1], [2], [12], [23] — natural for legal-style prose.
@@ -2701,6 +2702,12 @@ export async function runLLMStream(params: {
         payload: { model: model ?? "default" },
     });
 
+    // feat-014 — bounded loop. Tracks tool dispatches, repeated identical
+    // calls, and wall-clock since the turn started. On escalation we append
+    // an instruction to every tool result asking the model to synthesise
+    // instead of calling more tools, and emit a loop.escalated audit row.
+    const loop = new LoopController();
+
     // ─── Per-marker citation verifier (parallel) ────────────────────────────
     // Olava is cheap; one Olava call per [N] marker is the right cost
     // profile, and firing them as soon as each marker streams (rather than
@@ -3198,6 +3205,8 @@ export async function runLLMStream(params: {
             // latency as a coarse-grained per-tool timing. Once feat-016
             // ships the {ok,error,retryable} envelope we'll classify per-
             // tool failures here as tool.call_failed.
+            // feat-014 — record each call against the loop budget here too
+            // so a single iteration with N calls counts as N steps, not 1.
             const toolBatchLatencyMs = Date.now() - toolBatchStartedAt;
             for (const nr of normalized) {
                 const matchingCall = toolCalls.find((c) => c.id === nr.tool_use_id);
@@ -3212,6 +3221,37 @@ export async function runLLMStream(params: {
                         result_length: nr.content.length,
                     },
                 });
+                if (matchingCall) {
+                    loop.recordStep(
+                        matchingCall.function.name,
+                        matchingCall.function.arguments,
+                    );
+                }
+            }
+
+            // feat-014 — if we've blown the budget, append a synthesis
+            // instruction to every result so the LLM sees it on its next
+            // iteration. The model still gets the data it just fetched —
+            // we only ask it to stop reaching for more tools.
+            const escalation = loop.shouldEscalate();
+            if (escalation) {
+                console.warn(
+                    `[loop-controller] escalating: ${escalation.reason} at step ${escalation.step}`,
+                );
+                recordEvent({
+                    db,
+                    chatId,
+                    type: "loop.escalated",
+                    payload: {
+                        reason: escalation.reason,
+                        step: escalation.step,
+                        detail: escalation.detail,
+                    },
+                });
+                const note = escalationNote(escalation);
+                for (const nr of normalized) {
+                    nr.content = nr.content + note;
+                }
             }
 
             return normalized;
