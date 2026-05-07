@@ -2672,8 +2672,14 @@ export async function runLLMStream(params: {
     const visionHint = hasVisionContent
         ? "\n\nVISION MODE: The user's attached PDFs are provided to you as page images in the user message above. Read directly from those images — they preserve tables, charts, signatures, and visual layout that text extraction would lose. You do NOT need to call read_document for these PDFs unless you specifically want a plain-text extraction for some reason."
         : "";
+    const thinkingBudgetHint =
+        "\n\nREASONING BUDGET: Keep internal analysis brief and targeted. Do not narrate every intermediate possibility; once the relevant source, table, or clause is found, answer directly.";
     const systemPrompt =
-        baseSystemPrompt + legalSourceHint + webHint + visionHint;
+        baseSystemPrompt +
+        legalSourceHint +
+        webHint +
+        visionHint +
+        thinkingBudgetHint;
 
     const events: AssistantEvent[] = [];
     // One assistant turn produces at most one document_versions row per

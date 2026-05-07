@@ -36,16 +36,75 @@ type StreamDelta = {
     }>;
 };
 
-// Default token budget. Reasoning models burn tokens thinking before they
-// produce the answer, so we need a generous cap. Override via OLAVA_MAX_TOKENS
-// for tuning per deployment without a code change.
-const DEFAULT_MAX_TOKENS = 16384;
+// Default token budget for interactive chat. Thinking stays enabled by
+// default, but 8k keeps verbose reasoning from burning the previous 16k+
+// output-token budget. Override via OLAVA_MAX_TOKENS.
+const DEFAULT_MAX_TOKENS = 8192;
+const DEFAULT_COMPLETION_MAX_TOKENS = 2048;
+type OlavaThinkingMode = "off" | "low" | "standard";
 
 function maxTokens(): number {
     const raw = process.env.OLAVA_MAX_TOKENS?.trim();
     if (!raw) return DEFAULT_MAX_TOKENS;
     const n = Number.parseInt(raw, 10);
     return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_TOKENS;
+}
+
+function completionDefaultMaxTokens(): number {
+    const raw = process.env.OLAVA_COMPLETION_MAX_TOKENS?.trim();
+    if (!raw) return DEFAULT_COMPLETION_MAX_TOKENS;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_COMPLETION_MAX_TOKENS;
+}
+
+function completionMaxTokens(requested?: number): number {
+    if (typeof requested === "number" && Number.isFinite(requested) && requested > 0) {
+        return Math.floor(requested);
+    }
+    return completionDefaultMaxTokens();
+}
+
+function olavaThinkingMode(enableThinking?: boolean): OlavaThinkingMode {
+    if (!enableThinking) return "off";
+    const raw = process.env.OLAVA_THINKING_MODE?.trim().toLowerCase();
+    if (raw === "off" || raw === "low" || raw === "standard") return raw;
+    return "standard";
+}
+
+function applyThinkingControls(
+    body: Record<string, unknown>,
+    mode: OlavaThinkingMode,
+) {
+    // Qwen3/vLLM exposes thinking control through request-level
+    // chat_template_kwargs. This is not part of the OpenAI spec, but vLLM
+    // accepts it and request-level values override server defaults. `low`
+    // intentionally uses the hard non-thinking switch; Qwen does not expose
+    // a stable per-request "think for N tokens" budget.
+    body.chat_template_kwargs = {
+        enable_thinking: mode === "standard",
+    };
+}
+
+function appendNoThinkHint(
+    messages: OlavaMessage[],
+    mode: OlavaThinkingMode,
+): OlavaMessage[] {
+    if (mode === "standard") return messages;
+    const hint =
+        "/no_think\nKeep reasoning private and brief. Return the final answer directly.";
+    if (messages[0]?.role === "system") {
+        return [
+            {
+                ...messages[0],
+                content:
+                    typeof messages[0].content === "string"
+                        ? `${messages[0].content}\n\n${hint}`
+                        : hint,
+            },
+            ...messages.slice(1),
+        ];
+    }
+    return [{ role: "system", content: hint }, ...messages];
 }
 
 // Some vLLM builds embed thinking inline as <think>...</think> in `content`
@@ -241,9 +300,18 @@ async function recoverToolCallNonStreaming(args: {
     messages: OlavaMessage[];
     tools: unknown[];
     iter: number;
+    thinkingMode: OlavaThinkingMode;
 }): Promise<NormalizedToolCall | null> {
-    const { model, messages, tools, iter } = args;
+    const { model, messages, tools, iter, thinkingMode } = args;
     try {
+        const body: Record<string, unknown> = {
+            model,
+            messages: appendNoThinkHint(messages, thinkingMode),
+            stream: false,
+            max_tokens: maxTokens(),
+            tools,
+        };
+        applyThinkingControls(body, thinkingMode);
         const resp = await fetch(endpoint(), {
             method: "POST",
             headers: {
@@ -251,13 +319,7 @@ async function recoverToolCallNonStreaming(args: {
                 "User-Agent": "Mozilla/5.0",
                 ...authHeaders(),
             },
-            body: JSON.stringify({
-                model,
-                messages,
-                stream: false,
-                max_tokens: maxTokens(),
-                tools,
-            }),
+            body: JSON.stringify(body),
         });
         if (!resp.ok) return null;
         const json = (await resp.json()) as {
@@ -312,6 +374,7 @@ export async function streamOlava(
 ): Promise<StreamChatResult> {
     const { model, systemPrompt, tools = [], callbacks = {}, runTools } = params;
     const maxIter = params.maxIterations ?? 10;
+    const thinkingMode = olavaThinkingMode(params.enableThinking);
 
     // vLLM's tool-call streaming is broken for the Olava LoRA: with
     // --tool-call-parser hermes (or any other built-in), the LoRA's custom
@@ -351,10 +414,11 @@ export async function streamOlava(
     for (let iter = 0; iter < maxIter; iter++) {
         const body: Record<string, unknown> = {
             model,
-            messages,
+            messages: appendNoThinkHint(messages, thinkingMode),
             stream: true,
             max_tokens: maxTokens(),
         };
+        applyThinkingControls(body, thinkingMode);
         // vLLM only accepts tools if the server was started with
         // --enable-auto-tool-choice and --tool-call-parser. Most deployments
         // don't run with those flags, so by default we drop tools and let the
@@ -523,6 +587,7 @@ export async function streamOlava(
                 messages,
                 tools,
                 iter,
+                thinkingMode,
             });
             if (recovered) {
                 toolCalls.push(recovered);
@@ -568,6 +633,7 @@ async function nonStreamOlavaWithTools(
 ): Promise<StreamChatResult> {
     const { model, systemPrompt, tools = [], callbacks = {}, runTools } = params;
     const maxIter = params.maxIterations ?? 10;
+    const thinkingMode = olavaThinkingMode(params.enableThinking);
 
     const messages: OlavaMessage[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
@@ -583,11 +649,12 @@ async function nonStreamOlavaWithTools(
     for (let iter = 0; iter < maxIter; iter++) {
         const body: Record<string, unknown> = {
             model,
-            messages,
+            messages: appendNoThinkHint(messages, thinkingMode),
             stream: false,
             max_tokens: maxTokens(),
             tools,
         };
+        applyThinkingControls(body, thinkingMode);
 
         const resp = await fetch(endpoint(), {
             method: "POST",
@@ -717,14 +784,14 @@ export async function completeOlavaText(params: {
         messages.push({ role: "system", content: params.systemPrompt });
     messages.push({ role: "user", content: params.user });
 
-    // Reasoning models need a lot of headroom: the chain-of-thought eats
-    // tokens before the answer is produced, and callers tuned for
-    // non-reasoning models tend to pass small caps (e.g. 2048) that aren't
-    // enough. Take the larger of the caller's request and the env default
-    // so we never undershoot the budget the model actually needs.
-    const requestedMax = params.maxTokens ?? 0;
-    const envMax = maxTokens();
-    const effectiveMax = Math.max(requestedMax, envMax);
+    const thinkingMode = olavaThinkingMode(false);
+    const effectiveMax = completionMaxTokens(params.maxTokens);
+    const body: Record<string, unknown> = {
+        model: params.model,
+        messages: appendNoThinkHint(messages, thinkingMode),
+        max_tokens: effectiveMax,
+    };
+    applyThinkingControls(body, thinkingMode);
 
     const resp = await fetch(endpoint(), {
         method: "POST",
@@ -733,11 +800,7 @@ export async function completeOlavaText(params: {
             "User-Agent": "Mozilla/5.0",
             ...authHeaders(),
         },
-        body: JSON.stringify({
-            model: params.model,
-            messages,
-            max_tokens: effectiveMax,
-        }),
+        body: JSON.stringify(body),
     });
     if (!resp.ok) {
         const text = await resp.text().catch(() => "");
@@ -753,7 +816,7 @@ export async function completeOlavaText(params: {
     if (choice?.finish_reason === "length") {
         console.warn(
             `[olava] non-streaming completion hit max_tokens — answer may be truncated. ` +
-                `Bump OLAVA_MAX_TOKENS to allow more tokens.`,
+                `Raise the caller maxTokens or OLAVA_COMPLETION_MAX_TOKENS to allow more tokens.`,
         );
     }
     const content = choice?.message?.content ?? "";

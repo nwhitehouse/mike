@@ -24,6 +24,7 @@ Example output: [3, 7, 1, 12, 0, 5, 9]`;
 const DEFAULT_TOP_N = 8;
 const MIN_TOP_N = 5;
 const MAX_TOP_N = 10;
+const MAX_TRIAGE_TOKENS = 512;
 
 function buildUserPrompt(question: string, pool: RankedResult[]): string {
     const lines = pool.map((r, i) => {
@@ -76,6 +77,7 @@ export async function triageResults(args: {
             model,
             systemPrompt: SYSTEM,
             user: buildUserPrompt(question, pool),
+            maxTokens: MAX_TRIAGE_TOKENS,
         });
     } catch (err) {
         console.warn("[research/triage] Olava call failed, using pool order:", err);

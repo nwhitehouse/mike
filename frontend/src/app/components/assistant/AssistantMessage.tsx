@@ -357,7 +357,6 @@ function ReasoningBlock({
     isStreaming: boolean;
     showConnector?: boolean;
 }) {
-    const [isOpen, setIsOpen] = useState(false);
     const [thinkingIndex, setThinkingIndex] = useState(0);
 
     useEffect(() => {
@@ -368,52 +367,73 @@ function ReasoningBlock({
         return () => clearInterval(interval);
     }, [isStreaming]);
 
-    const showContent = isOpen || isStreaming;
+    const label = isStreaming
+        ? THINKING_PHRASES[thinkingIndex]
+        : "Thought process";
+    const normalizedText = text.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n");
 
     return (
         <div className="relative">
             {showConnector && (
                 <div className="absolute left-0 top-0 bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
             )}
-            <button
-                onClick={() => !isStreaming && setIsOpen((v) => !v)}
-                className="flex items-center text-sm font-serif text-gray-500 hover:text-gray-600 transition-colors"
-            >
+            <div className="flex items-center text-sm font-serif text-gray-500">
                 {isStreaming ? (
                     <div className="w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
                 ) : (
                     <div className="w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0" />
                 )}
-                <span className="font-medium ml-2">
-                    {isStreaming
-                        ? THINKING_PHRASES[thinkingIndex]
-                        : "Thought process"}
-                </span>
-                {!isStreaming && (
-                    <ChevronDown
-                        size={10}
-                        className={`ml-1 self-center transition-transform duration-200 ${isOpen ? "" : "-rotate-90"}`}
-                    />
-                )}
-            </button>
-            {showContent && (
-                <div className="mt-2 ml-[14px] text-sm font-serif text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm">
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        urlTransform={safeMarkdownUrl}
-                        components={{
-                            code: ({ node, ...props }) => (
-                                <code
-                                    className="font-serif text-gray-600"
-                                    {...props}
-                                />
-                            ),
-                        }}
-                    >
-                        {text}
-                    </ReactMarkdown>
-                </div>
-            )}
+                <span className="font-medium ml-2">{label}</span>
+            </div>
+            <div className="mt-2 ml-[14px] max-h-72 overflow-y-auto rounded-md border border-gray-100 bg-white/70 px-3 py-2 text-sm font-serif text-gray-500">
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    urlTransform={safeMarkdownUrl}
+                    components={{
+                        p: ({ node, ...props }) => (
+                            <p
+                                className="mb-2 whitespace-pre-wrap leading-6 last:mb-0"
+                                {...props}
+                            />
+                        ),
+                        ul: ({ node, ...props }) => (
+                            <ul
+                                className="mb-2 list-disc list-outside pl-5 leading-6 last:mb-0"
+                                {...props}
+                            />
+                        ),
+                        ol: ({ node, ...props }) => (
+                            <ol
+                                className="mb-2 list-decimal list-outside pl-5 leading-6 last:mb-0"
+                                {...props}
+                            />
+                        ),
+                        li: ({ node, ...props }) => (
+                            <li className="mb-1 last:mb-0" {...props} />
+                        ),
+                        strong: ({ node, ...props }) => (
+                            <strong
+                                className="font-semibold text-gray-600"
+                                {...props}
+                            />
+                        ),
+                        code: ({ node, ...props }) => (
+                            <code
+                                className="rounded bg-gray-100 px-1 py-0.5 font-serif text-gray-600"
+                                {...props}
+                            />
+                        ),
+                        blockquote: ({ node, ...props }) => (
+                            <blockquote
+                                className="my-2 border-l-2 border-gray-200 pl-3 italic text-gray-500"
+                                {...props}
+                            />
+                        ),
+                    }}
+                >
+                    {normalizedText}
+                </ReactMarkdown>
+            </div>
         </div>
     );
 }
@@ -1721,11 +1741,16 @@ export function AssistantMessage({
                                     "isStreaming" in event &&
                                     !!event.isStreaming,
                             );
+                            const containsReasoning = g.events.some(
+                                (event) => event.type === "reasoning",
+                            );
                             return (
                                 <PreResponseWrapper
                                     key={`p-${g.indices[0]}`}
                                     stepCount={g.events.length}
-                                    shouldMinimize={subsequentContent}
+                                    shouldMinimize={
+                                        subsequentContent || containsReasoning
+                                    }
                                     isStreaming={wrapperIsStreaming}
                                 >
                                     {g.events.map((event, i) =>

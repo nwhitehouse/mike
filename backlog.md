@@ -806,6 +806,37 @@ Per-marker verifier in `lib/research/citationVerifier.ts` is awaited at end-of-t
 
 User leans (B). 1-line change.
 
+### bug-008 Assistant thinking output is noisy and expanded by default
+**Status:** in-progress
+**Branch:** `feat-019-thinking-controls`
+**Priority:** High — current Qwen reasoning cards are visually overwhelming
+
+The assistant currently renders streamed reasoning/thinking text inside the working card by default. Long Qwen reasoning comes through as one dense grey block with poor paragraph/line handling, which makes the response feel broken before the actual answer arrives.
+
+Fix: keep the working/thinking card collapsed by default, let the user expand it when needed, and render reasoning text with readable line-height, spacing, markdown-aware paragraphs/lists/code, and a bounded scroll area so it never dominates the message.
+
+Acceptance:
+- Thinking/reasoning is hidden by default inside the working card.
+- The card can be expanded/collapsed while streaming and after completion.
+- Expanded reasoning has readable spacing and preserves line breaks.
+- Final answer content remains visible and unaffected.
+
+### feat-019 Limit Olava/Qwen thinking effort
+**Status:** in-progress
+**Branch:** `feat-019-thinking-controls`
+**Priority:** High — Qwen 3.6 base spends too much budget on verbose reasoning
+
+Olava is served through vLLM/Qwen and currently leaves thinking enabled for interactive chat, with a large total token cap. The model often spends a disproportionate amount of output on `reasoning_content` before producing the answer.
+
+Fix: add deploy-level controls for thinking effort. Keep thinking enabled for interactive chat by default, provide an override for low/non-thinking mode when needed, lower the interactive chat max-token cap, respect small per-call max-token caps for helper calls, and cap how much reasoning text is streamed/persisted in the UI if the server emits too much.
+
+Acceptance:
+- Backend exposes env knobs for thinking mode, reasoning-display limit, chat max tokens, and helper-completion max tokens.
+- Default chat path preserves Qwen thinking.
+- Non-interactive completions avoid thinking by default.
+- Title/query/triage/extraction helper calls do not inherit the large chat-token cap.
+- If reasoning still streams, only a bounded readable excerpt is persisted/rendered.
+
 ### feat-011 vLLM prefix caching
 **Status:** ready (vLLM-side flag flip)
 **Priority:** Medium — second-biggest first-token latency

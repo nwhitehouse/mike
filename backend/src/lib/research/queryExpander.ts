@@ -21,6 +21,7 @@ Each item must have:
 Return ONLY the JSON array. No prose. No markdown fences.`;
 
 const MAX_QUERIES = 6; // hard cap regardless of what the model returns
+const MAX_QUERY_EXPANDER_TOKENS = 512;
 
 function buildUserPrompt(args: {
     question: string;
@@ -91,6 +92,7 @@ export async function expandQueries(args: {
             model,
             systemPrompt: SYSTEM,
             user: buildUserPrompt({ question, legalSources, webEnabled }),
+            maxTokens: MAX_QUERY_EXPANDER_TOKENS,
         });
     } catch (err) {
         console.warn("[research/queryExpander] Olava call failed:", err);
