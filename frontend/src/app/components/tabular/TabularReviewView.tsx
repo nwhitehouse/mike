@@ -586,8 +586,20 @@ export function TRView({ reviewId, projectId }: Props) {
         if (hiddenColumnIndices.includes(columnIndex)) return;
         persistHiddenColumns([...hiddenColumnIndices, columnIndex]);
     }
+    function handleToggleColumnVisibility(columnIndex: number) {
+        if (hiddenColumnIndices.includes(columnIndex)) {
+            persistHiddenColumns(
+                hiddenColumnIndices.filter((i) => i !== columnIndex),
+            );
+        } else {
+            persistHiddenColumns([...hiddenColumnIndices, columnIndex]);
+        }
+    }
     function handleShowAllColumns() {
         persistHiddenColumns([]);
+    }
+    function handleHideAllColumns() {
+        persistHiddenColumns(columns.map((c) => c.index));
     }
 
     // feat-021 — reprocess one column. Server wipes its cells and starts
@@ -990,6 +1002,11 @@ export function TRView({ reviewId, projectId }: Props) {
                         wrapText={wrapText}
                         onHideColumn={handleHideColumn}
                         onReprocessColumn={handleReprocessColumn}
+                        allColumns={columns}
+                        hiddenColumnIndices={hiddenColumnIndices}
+                        onToggleColumnVisibility={handleToggleColumnVisibility}
+                        onShowAllColumns={handleShowAllColumns}
+                        onHideAllColumns={handleHideAllColumns}
                     />
                 </div>
             </div>

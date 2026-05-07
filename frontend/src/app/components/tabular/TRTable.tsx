@@ -11,6 +11,7 @@ import { GripVertical, Plus, Table2 } from "lucide-react";
 import type { ColumnConfig, MikeDocument, TabularCell } from "../shared/types";
 import { TabularCell as TabularCellComponent } from "./TabularCell";
 import { TREditColumnMenu } from "./TREditColumnMenu";
+import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 
 const SKELETON_COLS = 4;
 const SKELETON_ROWS = 5;
@@ -51,6 +52,16 @@ interface Props {
     onHideColumn?: (colIndex: number) => void;
     /** feat-021 — re-run only this column's cells via the worker pool. */
     onReprocessColumn?: (colIndex: number) => void | Promise<void>;
+    /** feat-021 — full column list incl. hidden, for the manage-columns menu. */
+    allColumns?: ColumnConfig[];
+    /** feat-021 — indices of columns currently hidden. */
+    hiddenColumnIndices?: number[];
+    /** feat-021 — toggle a column's visibility from the manage menu. */
+    onToggleColumnVisibility?: (colIndex: number) => void;
+    /** feat-021 — show all hidden columns. */
+    onShowAllColumns?: () => void;
+    /** feat-021 — hide every column at once. */
+    onHideAllColumns?: () => void;
 }
 
 export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
@@ -75,6 +86,11 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         onDocumentClick,
         onHideColumn,
         onReprocessColumn,
+        allColumns,
+        hiddenColumnIndices,
+        onToggleColumnVisibility,
+        onShowAllColumns,
+        onHideAllColumns,
     },
     ref,
 ) {
@@ -401,14 +417,33 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                         </div>
                     );
                 })}
-                <div className="flex-1 border-b border-border flex items-center justify-start p-2 min-w-8">
+                <div className="flex-1 border-b border-border flex items-center justify-start p-2 min-w-8 gap-2">
                     <button
                         onClick={onAddColumn}
                         disabled={savingColumn || savingColumnsConfig}
                         className="flex items-center justify-center text-muted-foreground/70 hover:text-foreground transition-colors disabled:text-muted-foreground/30"
+                        title="Add column"
                     >
                         <Plus className="h-4 w-4" />
                     </button>
+                    {/* feat-021 — manage columns popover (show/hide/delete). */}
+                    {allColumns &&
+                        hiddenColumnIndices &&
+                        onToggleColumnVisibility &&
+                        onShowAllColumns &&
+                        onHideAllColumns && (
+                            <ColumnVisibilityMenu
+                                columns={allColumns}
+                                hiddenColumnIndices={hiddenColumnIndices}
+                                onToggleColumn={onToggleColumnVisibility}
+                                onShowAll={onShowAllColumns}
+                                onHideAll={onHideAllColumns}
+                                onDeleteColumn={onDeleteColumn}
+                                disabled={
+                                    savingColumn || savingColumnsConfig
+                                }
+                            />
+                        )}
                 </div>
             </div>
 
