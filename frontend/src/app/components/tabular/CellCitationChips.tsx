@@ -23,15 +23,30 @@ export interface CellCitationChipsProps {
 }
 
 /**
- * Try to label the chip with a section reference if one is at the start
- * of the quote (e.g. "Section 2.06 of the Loan Agreement..." → "Section
- * 2.06"). Falls back to "Page N". Keeps tooltips with the full quote so
- * the user can preview before clicking.
+ * Build a meaningful label for the chip. Tried in order:
+ *  1. Section reference at the start of the quote ("Section 2.06 …" →
+ *     "Section 2.06") — the most useful identifier when present.
+ *  2. Otherwise, the first ~40 chars of the cleaned quote, in curly
+ *     quotes — lets the user tell citations apart at a glance instead
+ *     of seeing four "Page 1" pills in a row.
+ *  3. Final fallback ("Page N") only when the quote is empty.
+ *
+ * Page number is rendered separately as a small suffix; full quote is
+ * always available on hover via the chip's title attribute.
  */
 function chipLabel(c: ParsedCitation): string {
-    const m = c.quote.match(/^(?:§|Section)\s*\d+(?:\.\d+)*[A-Za-z]?/i);
-    if (m) return m[0].replace(/^§/, "Section ").replace(/\s+/g, " ").trim();
-    return `Page ${c.page}`;
+    const sectionMatch = c.quote.match(
+        /^(?:§|Section)\s*\d+(?:\.\d+)*[A-Za-z]?/i,
+    );
+    if (sectionMatch) {
+        return sectionMatch[0]
+            .replace(/^§/, "Section ")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+    const cleaned = c.quote.replace(/\s+/g, " ").trim();
+    if (cleaned.length === 0) return `Page ${c.page}`;
+    return cleaned.length > 40 ? `“${cleaned.slice(0, 38)}…”` : `“${cleaned}”`;
 }
 
 export function CellCitationChips({
@@ -51,12 +66,14 @@ export function CellCitationChips({
                         type="button"
                         onClick={() => onJump(c)}
                         title={c.quote}
-                        className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted hover:border-foreground/30"
+                        className="inline-flex max-w-[260px] items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted hover:border-foreground/30"
                     >
                         <Quote className="h-2.5 w-2.5 text-muted-foreground/70 shrink-0" />
-                        <span className="truncate">{chipLabel(c)}</span>
-                        <span className="shrink-0 text-muted-foreground/70">
-                            · p{c.page}
+                        <span className="truncate min-w-0">
+                            {chipLabel(c)}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground/60">
+                            p{c.page}
                         </span>
                     </button>
                 ))}
