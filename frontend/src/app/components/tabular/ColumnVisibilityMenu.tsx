@@ -76,7 +76,7 @@ export function ColumnVisibilityMenu({
             </button>
 
             {open && (
-                <div className="absolute right-0 top-full z-30 mt-1.5 w-80 rounded-xl border border-border bg-card shadow-lg">
+                <div className="absolute right-0 top-full z-[80] mt-1.5 w-80 rounded-xl border border-border bg-card shadow-lg">
                     <div className="flex items-center justify-between px-3 pt-3 pb-2">
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                             Columns

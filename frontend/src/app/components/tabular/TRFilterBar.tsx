@@ -238,7 +238,7 @@ function AddFilterPopover({
     }
 
     return (
-        <div className="absolute left-0 top-full z-30 mt-1.5 w-80 rounded-xl border border-border bg-card p-3 shadow-lg">
+        <div className="absolute left-0 top-full z-[80] mt-1.5 w-80 rounded-xl border border-border bg-card p-3 shadow-lg">
             <div className="flex items-center justify-between mb-3">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Add filter
