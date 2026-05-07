@@ -4,7 +4,6 @@ import { createServerSupabase } from "../lib/supabase";
 import {
     buildDocContext,
     buildMessages,
-    enrichWithPriorEvents,
     buildWorkflowStore,
     extractAnnotations,
     runLLMStream,
@@ -423,13 +422,53 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         doc_id,
         filename: info.filename,
     }));
-    const enrichedMessages = await enrichWithPriorEvents(
-        messages,
-        chatId,
-        db,
-        docIndex,
-    );
-    let apiMessages = buildMessages(enrichedMessages, docAvailability) as {
+
+    // feat-017: load canonical conversation history from chat_messages
+    // (includes the user message just persisted plus prior tool rows +
+    // assistant_text/assistant_tool_calls). See projectChat.ts for the
+    // full rationale; same pattern.
+    const { data: dbRows } = await db
+        .from("chat_messages")
+        .select(
+            "role, content, files, tool_call_id, assistant_text, assistant_tool_calls, created_at",
+        )
+        .eq("chat_id", chatId)
+        .order("created_at", { ascending: true });
+
+    const loadedMessages: ChatMessage[] = (dbRows ?? []).map((row) => {
+        const r = row as {
+            role: string;
+            content: unknown;
+            files?: unknown;
+            tool_call_id?: string | null;
+            assistant_text?: string | null;
+            assistant_tool_calls?: unknown;
+        };
+        if (r.role === "tool") {
+            return {
+                role: "tool",
+                content: typeof r.content === "string" ? r.content : "",
+                tool_call_id: r.tool_call_id ?? undefined,
+            };
+        }
+        if (r.role === "assistant") {
+            return {
+                role: "assistant",
+                content: null,
+                assistant_text: r.assistant_text ?? null,
+                tool_calls: Array.isArray(r.assistant_tool_calls)
+                    ? (r.assistant_tool_calls as ChatMessage["tool_calls"])
+                    : undefined,
+            };
+        }
+        return {
+            role: "user",
+            content: typeof r.content === "string" ? r.content : "",
+            files: Array.isArray(r.files) ? (r.files as ChatMessage["files"]) : undefined,
+        };
+    });
+
+    let apiMessages = buildMessages(loadedMessages, docAvailability) as {
         role: string;
         content: string | null;
     }[];
@@ -475,6 +514,11 @@ chatRouter.post("/", requireAuth, async (req, res) => {
 
         let fullText: string;
         let events: unknown[];
+        let assistantToolCalls: Array<{
+            id: string;
+            type: "function";
+            function: { name: string; arguments: string };
+        }> = [];
 
         if (inResearchMode) {
             const { runResearchOrchestrator } = await import(
@@ -492,6 +536,8 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             });
             fullText = result.fullText;
             events = result.events;
+            // research orchestrator runs its own internal fan-out, no
+            // top-level tool_calls to persist for in-chat replay (feat-017).
         } else {
             const result = await runLLMStream({
                 apiMessages,
@@ -505,12 +551,16 @@ chatRouter.post("/", requireAuth, async (req, res) => {
                 apiKeys,
                 projectId: project_id ?? null,
                 sources,
+                chatId,
             });
             fullText = result.fullText;
             events = result.events;
+            assistantToolCalls = result.assistantToolCalls;
         }
 
         const annotations = extractAnnotations(fullText, docIndex, events);
+        // feat-017: persist assistant_text + assistant_tool_calls alongside
+        // the legacy events[] (which the frontend still uses for display).
         const { error: assistantInsertError } = await db
             .from("chat_messages")
             .insert({
@@ -518,6 +568,10 @@ chatRouter.post("/", requireAuth, async (req, res) => {
                 role: "assistant",
                 content: events.length ? events : null,
                 annotations: annotations.length ? annotations : null,
+                assistant_text: fullText || null,
+                assistant_tool_calls: assistantToolCalls.length
+                    ? assistantToolCalls
+                    : null,
             });
         if (assistantInsertError) {
             console.error(

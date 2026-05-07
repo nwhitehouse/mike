@@ -484,13 +484,22 @@ export function ChatView({
                             style={{ opacity: messagesVisible ? 1 : 0 }}
                         >
                             {(() => {
-                                const lastUserIndex = messages
+                                // feat-017: chat_messages now also stores
+                                // role="tool" rows (tool results replayed to
+                                // the LLM on subsequent turns). They aren't
+                                // user-facing — hide them from the rendered
+                                // chat. The conversation reads the same to
+                                // the user as it did before persistence.
+                                const visibleMessages = messages.filter(
+                                    (m) => m.role !== "tool",
+                                );
+                                const lastUserIndex = visibleMessages
                                     .map((m) => m.role)
                                     .lastIndexOf("user");
-                                const lastAssistantIndex = messages
+                                const lastAssistantIndex = visibleMessages
                                     .map((m) => m.role)
                                     .lastIndexOf("assistant");
-                                return messages.map((msg, i) => (
+                                return visibleMessages.map((msg, i) => (
                                     <div
                                         key={i}
                                         ref={
@@ -522,7 +531,7 @@ export function ChatView({
                                                 content={msg.content ?? ""}
                                                 events={msg.events}
                                                 isStreaming={
-                                                    i === messages.length - 1 &&
+                                                    i === visibleMessages.length - 1 &&
                                                     isResponseLoading
                                                 }
                                                 isError={!!(msg as any).error}

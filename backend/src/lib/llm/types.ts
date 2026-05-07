@@ -21,14 +21,37 @@ export type LlmImageBlock = {
 export type LlmContentBlock = LlmTextBlock | LlmImageBlock;
 
 export type LlmMessage = {
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "tool";
     /**
      * Plain string for text-only turns (the common case). Array of content
      * blocks for vision turns where the user message includes images
      * (OpenAI Chat Completions multimodal format). Provider adapters pass
      * the array through to the wire — vLLM serves Qwen3-VL natively.
+     *
+     * For role="tool" rows: the stringified tool result returned to the model.
+     * For role="assistant" rows that called tools: the prose text the model
+     * produced (including any `<tool_call>` markup) — `tool_calls` carries the
+     * structured calls separately for the OpenAI-canonical format.
      */
-    content: string | LlmContentBlock[];
+    content: string | LlmContentBlock[] | null;
+    /**
+     * For role="tool" rows replayed from chat history: matches the `id` of
+     * the corresponding tool call in a prior assistant message's `tool_calls`.
+     * Pairs results with calls per OpenAI Chat Completions semantics. Required
+     * when role="tool"; ignored otherwise.
+     */
+    tool_call_id?: string;
+    /**
+     * For role="assistant" rows replayed from chat history: structured tool
+     * calls the model issued during this turn. feat-017 persists these so
+     * the next conversation turn sees the canonical
+     * {assistant.tool_calls} → {tool.tool_call_id} alternation.
+     */
+    tool_calls?: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+    }>;
 };
 
 export type NormalizedToolCall = {

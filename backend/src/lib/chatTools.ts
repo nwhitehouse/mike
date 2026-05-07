@@ -87,6 +87,28 @@ export type ChatMessage = {
     content: string | null;
     files?: { filename: string; document_id?: string }[];
     workflow?: { id: string; title: string };
+    /**
+     * For role="tool" rows loaded from chat_messages: matches the id of a
+     * tool call in a prior assistant message's tool_calls. feat-017.
+     */
+    tool_call_id?: string;
+    /**
+     * For role="assistant" rows loaded from chat_messages: structured
+     * tool_calls aggregated from this turn. feat-017 replays them so the
+     * model sees its prior turn's tool round-trip in canonical OpenAI form.
+     */
+    tool_calls?: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+    }>;
+    /**
+     * For role="assistant" rows loaded from chat_messages: the raw model
+     * output from this turn, including any `<tool_call>` markup. Used for
+     * LLM replay; the existing `content` continues to hold the events[]
+     * array that the frontend renders. feat-017.
+     */
+    assistant_text?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -616,96 +638,11 @@ export function resolveDocLabel(
  * slug from the prior turn would be meaningless. Falls back to filename
  * only if the doc is no longer in the index (deleted, scope changed).
  */
-export async function enrichWithPriorEvents(
-    messages: ChatMessage[],
-    chatId: string | null | undefined,
-    db: ReturnType<typeof createServerSupabase>,
-    docIndex: DocIndex,
-): Promise<ChatMessage[]> {
-    if (!chatId) return messages;
-    const { data: rows } = await db
-        .from("chat_messages")
-        .select("content, created_at")
-        .eq("chat_id", chatId)
-        .eq("role", "assistant")
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-    const lastRow = rows?.[0] as { content?: unknown } | undefined;
-    const content = lastRow?.content;
-    if (!Array.isArray(content)) return messages;
-
-    const slugByDocumentId = new Map<string, string>();
-    for (const [slug, info] of Object.entries(docIndex)) {
-        if (info.document_id) slugByDocumentId.set(info.document_id, slug);
-    }
-    const refFor = (documentId: unknown, filename: unknown) => {
-        const slug =
-            typeof documentId === "string"
-                ? slugByDocumentId.get(documentId)
-                : undefined;
-        return slug ? `${slug} ("${filename}")` : `"${filename}"`;
-    };
-
-    const lines: string[] = [];
-    for (const ev of content as Record<string, unknown>[]) {
-        if (ev?.type === "doc_created") {
-            lines.push(
-                `- generate_docx → ${refFor(ev.document_id, ev.filename)}`,
-            );
-        } else if (ev?.type === "doc_edited") {
-            lines.push(
-                `- edit_document → ${refFor(ev.document_id, ev.filename)}`,
-            );
-        } else if (ev?.type === "doc_read") {
-            lines.push(
-                `- read_document → ${refFor(ev.document_id, ev.filename)}`,
-            );
-        } else if (ev?.type === "doc_replicated") {
-            // The model needs to know what each copy resolved to so it
-            // can call edit_document / read_document on them. Emit one
-            // line per copy, all attributed back to the same source.
-            const srcLabel =
-                typeof ev.filename === "string" ? `"${ev.filename}"` : "";
-            const copies = Array.isArray(ev.copies)
-                ? (ev.copies as {
-                      new_filename?: unknown;
-                      document_id?: unknown;
-                  }[])
-                : [];
-            for (const c of copies) {
-                const ref = refFor(c.document_id, c.new_filename);
-                lines.push(
-                    srcLabel
-                        ? `- replicate_document → ${ref} (copy of ${srcLabel})`
-                        : `- replicate_document → ${ref}`,
-                );
-            }
-        } else if (ev?.type === "workflow_applied") {
-            lines.push(`- applied workflow: "${ev.title}"`);
-        }
-    }
-    if (lines.length === 0) return messages;
-    const summary = `\n\n[Tool activity in your previous turn]\n${lines.join("\n")}`;
-
-    // Find the index of the last assistant message and attach the
-    // summary there only.
-    let lastAssistantIdx = -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === "assistant") {
-            lastAssistantIdx = i;
-            break;
-        }
-    }
-    if (lastAssistantIdx < 0) return messages;
-    const enriched = messages.slice();
-    const target = enriched[lastAssistantIdx];
-    enriched[lastAssistantIdx] = {
-        ...target,
-        content: (target.content ?? "") + summary,
-    };
-    return enriched;
-}
+// feat-017: enrichWithPriorEvents was a partial workaround for in-chat
+// context loss — it summarised the *names* of tools called in the prior
+// turn into the last assistant message ("[Tool activity in your previous
+// turn] - read_document → doc-1"). Removed now that we replay full tool
+// calls + tool results from chat_messages on every turn.
 
 export function buildMessages(
     messages: ChatMessage[],
@@ -726,8 +663,11 @@ export function buildMessages(
             const label = doc.folder_path ? `${doc.folder_path} / ${doc.filename}` : doc.filename;
             systemContent += `- ${doc.doc_id}: ${label}\n`;
         }
+        // feat-017: prior tool calls + their results are now replayed in the
+        // message history (see route handlers' DB-load step). Tell the model
+        // to use them rather than re-reading every turn.
         systemContent +=
-            "\nYou do NOT retain document content between conversation turns. You MUST call read_document (or fetch_documents) at the start of every response that involves a document's content, even if you have read it in a previous turn. Failure to do so will result in hallucinated or stale content.\n---\n";
+            "\nTool results from earlier in this conversation are included in the message history below — refer to them rather than re-reading documents you've already inspected, unless the user implies the document may have changed.\n---\n";
     }
     formatted.push({ role: "system", content: systemContent });
 
@@ -742,6 +682,35 @@ export function buildMessages(
     }
 
     for (const msg of messages) {
+        // feat-017: tool rows replayed from chat history. Pass through with
+        // tool_call_id so the LLM pairs them with the prior assistant turn's
+        // tool_calls.
+        if (msg.role === "tool") {
+            formatted.push({
+                role: "tool",
+                tool_call_id: msg.tool_call_id,
+                content: msg.content ?? "",
+            });
+            continue;
+        }
+
+        // feat-017: assistant rows replayed from chat history use
+        // assistant_text (raw model output with `<tool_call>` markup) when
+        // available, falling back to whatever's in `content` for legacy rows.
+        if (msg.role === "assistant") {
+            const replayContent =
+                typeof msg.assistant_text === "string"
+                    ? msg.assistant_text
+                    : (msg.content ?? "");
+            const out: Record<string, unknown> = {
+                role: "assistant",
+                content: replayContent,
+            };
+            if (msg.tool_calls?.length) out.tool_calls = msg.tool_calls;
+            formatted.push(out);
+            continue;
+        }
+
         let content = msg.content ?? "";
         if (msg.role === "user" && msg.workflow) {
             content = `[Workflow: ${msg.workflow.title} (id: ${msg.workflow.id})]\n\n${content}`;
@@ -2619,8 +2588,20 @@ export async function runLLMStream(params: {
      * corresponding tool is not in the schema and the model can't call it.
      */
     sources?: { legal?: string[]; web?: boolean };
-}): Promise<{ fullText: string; events: AssistantEvent[] }> {
-    const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId, sources } = params;
+    /**
+     * feat-017 — chat id for in-chat memory persistence. When set, every
+     * tool result produced by this turn's runToolCalls is inserted as a
+     * `role:'tool'` row in chat_messages so the next turn can replay it.
+     * The aggregated `assistantToolCalls` is returned alongside fullText so
+     * the route handler can persist it on this turn's assistant row.
+     */
+    chatId?: string | null;
+}): Promise<{
+    fullText: string;
+    events: AssistantEvent[];
+    assistantToolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+}> {
+    const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId, sources, chatId } = params;
     const selectedLegalSources = sources?.legal ?? [];
     const webEnabled = sources?.web === true;
     const activeTools = [
@@ -2651,12 +2632,36 @@ export async function runLLMStream(params: {
         ? "\n\nWeb search is enabled — use `web_search` for current events, news, blog posts, " +
           "and commentary not covered by uploaded documents or legal databases."
         : "";
+    // feat-017: pass role='tool' rows through with tool_call_id, and pass
+    // assistant rows through with their structured tool_calls when present.
+    // buildMessages preserves both fields; the LLM adapter (olava.ts) reads
+    // them when serialising messages to the wire.
     const chatMessages: LlmMessage[] = rawMsgs
         .filter((m) => m.role !== "system")
-        .map((m) => ({
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: m.content ?? "",
-        }));
+        .map((m) => {
+            const raw = m as {
+                role: string;
+                content: string | LlmMessage["content"] | null;
+                tool_call_id?: string;
+                tool_calls?: LlmMessage["tool_calls"];
+            };
+            if (raw.role === "tool") {
+                return {
+                    role: "tool" as const,
+                    content: typeof raw.content === "string" ? raw.content : "",
+                    tool_call_id: raw.tool_call_id,
+                };
+            }
+            if (raw.role === "assistant") {
+                const out: LlmMessage = {
+                    role: "assistant",
+                    content: raw.content ?? "",
+                };
+                if (raw.tool_calls?.length) out.tool_calls = raw.tool_calls;
+                return out;
+            }
+            return { role: "user" as const, content: raw.content ?? "" };
+        });
     // If the upstream attached PDF page images to the last user message,
     // tell the model so it reads from the images instead of waiting for a
     // read_document tool result. Detected here (rather than passed in as
@@ -2675,6 +2680,14 @@ export async function runLLMStream(params: {
     // across batches to let subsequent edit_document calls overwrite the
     // turn's existing version instead of creating a new one.
     const turnEditState: TurnEditState = new Map();
+    // feat-017: aggregated structured tool_calls from every iteration of
+    // this turn. Returned to the route handler so it can persist them on
+    // the assistant's chat_messages row. Pairs with role='tool' rows by id.
+    const assistantToolCalls: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+    }> = [];
 
     // ─── Per-marker citation verifier (parallel) ────────────────────────────
     // Olava is cheap; one Olava call per [N] marker is the right cost
@@ -3103,7 +3116,7 @@ export async function runLLMStream(params: {
                 const row = r as { tool_call_id: string; content?: unknown };
                 resultByCallId.set(row.tool_call_id, String(row.content ?? ""));
             }
-            return toolCalls.map((c) => ({
+            const normalized = toolCalls.map((c) => ({
                 tool_use_id: c.id,
                 content:
                     resultByCallId.get(c.id) ??
@@ -3111,6 +3124,45 @@ export async function runLLMStream(params: {
                         error: `Tool '${c.function.name}' is not available.`,
                     }),
             }));
+
+            // feat-017: aggregate this iteration's calls onto the turn-level
+            // accumulator (returned to the route handler) AND persist each
+            // tool result as a chat_messages row so the next turn's
+            // buildMessages() can replay them. Fire-and-forget — a failed
+            // audit insert must never break the chat stream.
+            for (const c of toolCalls) {
+                assistantToolCalls.push({
+                    id: c.id,
+                    type: "function",
+                    function: {
+                        name: c.function.name,
+                        arguments: c.function.arguments,
+                    },
+                });
+            }
+            if (chatId) {
+                for (const nr of normalized) {
+                    const matchingCall = toolCalls.find((c) => c.id === nr.tool_use_id);
+                    db.from("chat_messages")
+                        .insert({
+                            chat_id: chatId,
+                            role: "tool",
+                            content: nr.content,
+                            tool_call_id: nr.tool_use_id,
+                            tool_name: matchingCall?.function.name ?? null,
+                        })
+                        .then(({ error }) => {
+                            if (error) {
+                                console.error(
+                                    "[feat-017] tool result persist failed",
+                                    error,
+                                );
+                            }
+                        });
+                }
+            }
+
+            return normalized;
         },
     });
 
@@ -3150,7 +3202,7 @@ export async function runLLMStream(params: {
     write(`data: ${JSON.stringify({ type: "citations", citations })}\n\n`);
     write("data: [DONE]\n\n");
 
-    return { fullText, events };
+    return { fullText, events, assistantToolCalls };
 }
 
 // ---------------------------------------------------------------------------

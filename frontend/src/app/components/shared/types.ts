@@ -178,7 +178,10 @@ export type AssistantEvent =
   | { type: "content"; text: string; isStreaming?: boolean };
 
 export interface MikeMessage {
-  role: "user" | "assistant";
+  // feat-017: chat_messages now also stores role="tool" rows that the LLM
+  // sees on replay. The frontend filters them out of the rendered chat
+  // (ChatView.tsx) but they arrive in GET /chat/:chatId payloads.
+  role: "user" | "assistant" | "tool";
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: { id: string; title: string };

@@ -28,19 +28,29 @@ function client(override?: string | null): Anthropic {
 function toNativeMessages(
     messages: StreamChatParams["messages"],
 ): NativeMessage[] {
-    return messages.map((m) => {
-        // Multimodal content (vision) is currently Olava-only — caller
-        // shouldn't be routing vision turns to Claude. If it does, flatten
-        // text blocks and drop images so the request still goes through.
-        if (typeof m.content === "string") {
-            return { role: m.role, content: m.content };
-        }
-        const text = m.content
-            .filter((b) => b.type === "text")
-            .map((b) => (b as { text: string }).text)
-            .join("\n");
-        return { role: m.role, content: text };
-    });
+    // feat-017: drop tool-role rows from claude path (this provider is
+    // currently dead code per coerceToOlava in llm/index.ts; if revived,
+    // map tool rows to Anthropic's `tool_result` content blocks here).
+    return messages
+        .filter((m): m is typeof m & { role: "user" | "assistant" } =>
+            m.role === "user" || m.role === "assistant",
+        )
+        .map((m) => {
+            // Multimodal content (vision) is currently Olava-only — caller
+            // shouldn't be routing vision turns to Claude. If it does, flatten
+            // text blocks and drop images so the request still goes through.
+            if (typeof m.content === "string") {
+                return { role: m.role, content: m.content };
+            }
+            if (m.content === null) {
+                return { role: m.role, content: "" };
+            }
+            const text = m.content
+                .filter((b) => b.type === "text")
+                .map((b) => (b as { text: string }).text)
+                .join("\n");
+            return { role: m.role, content: text };
+        });
 }
 
 export async function streamClaude(

@@ -5,7 +5,6 @@ import {
     buildProjectDocContext,
     buildMessages,
     buildWorkflowStore,
-    enrichWithPriorEvents,
     extractAnnotations,
     runLLMStream,
     PROJECT_EXTRA_TOOLS,
@@ -107,22 +106,64 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
         folder_path: folderPaths.get(doc_id),
     }));
 
-    const enrichedMessages = await enrichWithPriorEvents(
-        messages,
-        chatId,
-        db,
-        docIndex,
-    );
+    // feat-017: load the canonical conversation history from chat_messages,
+    // not from the frontend payload. The new user message was persisted just
+    // above, so this select includes it. Unlike the frontend payload, DB
+    // rows include the role='tool' results from prior turns plus the
+    // assistant rows' assistant_text + assistant_tool_calls — everything
+    // buildMessages needs to replay the canonical OpenAI tool round-trip.
+    const { data: dbRows } = await db
+        .from("chat_messages")
+        .select(
+            "role, content, files, tool_call_id, assistant_text, assistant_tool_calls, created_at",
+        )
+        .eq("chat_id", chatId)
+        .order("created_at", { ascending: true });
+
+    const loadedMessages: ChatMessage[] = (dbRows ?? []).map((row) => {
+        const r = row as {
+            role: string;
+            content: unknown;
+            files?: unknown;
+            tool_call_id?: string | null;
+            assistant_text?: string | null;
+            assistant_tool_calls?: unknown;
+        };
+        if (r.role === "tool") {
+            return {
+                role: "tool",
+                content: typeof r.content === "string" ? r.content : "",
+                tool_call_id: r.tool_call_id ?? undefined,
+            };
+        }
+        if (r.role === "assistant") {
+            return {
+                role: "assistant",
+                content: null,
+                assistant_text: r.assistant_text ?? null,
+                tool_calls: Array.isArray(r.assistant_tool_calls)
+                    ? (r.assistant_tool_calls as ChatMessage["tool_calls"])
+                    : undefined,
+            };
+        }
+        // user
+        return {
+            role: "user",
+            content: typeof r.content === "string" ? r.content : "",
+            files: Array.isArray(r.files) ? (r.files as ChatMessage["files"]) : undefined,
+        };
+    });
+
     const messagesForLLM: ChatMessage[] = displayed_doc
-        ? enrichedMessages.map((m, i) => {
-              if (i !== enrichedMessages.length - 1 || m.role !== "user")
+        ? loadedMessages.map((m, i) => {
+              if (i !== loadedMessages.length - 1 || m.role !== "user")
                   return m;
               return {
                   ...m,
                   content: `${m.content}\n\ndisplayed_doc: ${displayed_doc.filename}, displayed_doc_id: ${displayed_doc.document_id}`,
               };
           })
-        : enrichedMessages;
+        : loadedMessages;
 
     // The user-attached docs for this turn (dragged into / picked from
     // the chat input) come in as a request-level field. Surface them in
@@ -164,7 +205,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     try {
         write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
 
-        const { fullText, events } = await runLLMStream({
+        const { fullText, events, assistantToolCalls } = await runLLMStream({
             apiMessages,
             docStore,
             docIndex,
@@ -176,14 +217,23 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             model,
             apiKeys,
             projectId,
+            chatId,
         });
 
         const annotations = extractAnnotations(fullText, docIndex, events);
+        // feat-017: persist assistant_text (full model output with markup) and
+        // assistant_tool_calls so next turn's load-from-DB can replay this
+        // turn's canonical tool round-trip. `content` keeps holding events[]
+        // for frontend display compatibility.
         await db.from("chat_messages").insert({
             chat_id: chatId,
             role: "assistant",
             content: events.length ? events : null,
             annotations: annotations.length ? annotations : null,
+            assistant_text: fullText || null,
+            assistant_tool_calls: assistantToolCalls.length
+                ? assistantToolCalls
+                : null,
         });
 
         if (!chatTitle && lastUser?.content) {

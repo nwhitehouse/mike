@@ -336,7 +336,15 @@ export async function streamOlava(
 
     const messages: OlavaMessage[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    for (const m of params.messages) messages.push({ role: m.role, content: m.content });
+    for (const m of params.messages) {
+        // Preserve role='tool' rows (with tool_call_id) and assistant rows
+        // that carry structured tool_calls — feat-017 replays them from chat
+        // history so the model sees its prior turn's tool round-trip.
+        const out: OlavaMessage = { role: m.role, content: m.content };
+        if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+        if (m.tool_calls?.length) out.tool_calls = m.tool_calls;
+        messages.push(out);
+    }
 
     let fullText = "";
 
@@ -563,8 +571,12 @@ async function nonStreamOlavaWithTools(
 
     const messages: OlavaMessage[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    for (const m of params.messages)
-        messages.push({ role: m.role, content: m.content });
+    for (const m of params.messages) {
+        const out: OlavaMessage = { role: m.role, content: m.content };
+        if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+        if (m.tool_calls?.length) out.tool_calls = m.tool_calls;
+        messages.push(out);
+    }
 
     let fullText = "";
 
