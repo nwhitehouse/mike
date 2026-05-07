@@ -313,6 +313,12 @@ export interface TabularCell {
   } | null;
   status: "pending" | "generating" | "done" | "error";
   created_at: string;
+  // feat-023 — verified state for the filter predicate. False by default
+  // for legacy rows + freshly-generated cells. Toggled by the in-table
+  // hover ✓ control.
+  verified?: boolean;
+  verified_at?: string | null;
+  verified_by?: string | null;
 }
 
 // Workflows

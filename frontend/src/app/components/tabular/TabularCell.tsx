@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AlertCircle, Expand } from "lucide-react";
+import { AlertCircle, Check, Expand } from "lucide-react";
 import type { ColumnConfig, TabularCell as TCell } from "../shared/types";
 import { preprocessCitations, type ParsedCitation } from "./citation-utils";
 import { getPillClass } from "./pillUtils";
@@ -17,6 +17,9 @@ interface Props {
     /** When true, cells expand vertically and content wraps instead of being
      *  truncated to a single line. */
     wrapText?: boolean;
+    /** feat-023 — toggle the cell's verified state. Optional; when undefined
+     *  the verify check is rendered read-only (or hidden). */
+    onToggleVerify?: (cell: TCell, next: boolean) => void;
 }
 
 const FLAG_STYLES = {
@@ -161,6 +164,7 @@ export function TabularCell({
     onExpand,
     onCitationClick,
     wrapText = false,
+    onToggleVerify,
 }: Props) {
     const [inlineExpanded, setInlineExpanded] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -230,8 +234,31 @@ export function TabularCell({
                         title={cell.content.flag}
                     />
                 )}
+                {/* feat-023 — verify toggle. Always visible when verified
+                    (subtle green check); fades in on hover when not. */}
+                {onToggleVerify && cell.status === "done" && (
+                    <button
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleVerify(cell, !cell.verified);
+                        }}
+                        title={
+                            cell.verified
+                                ? "Verified — click to unverify"
+                                : "Mark as verified"
+                        }
+                        className={`absolute left-1 top-1.5 rounded-full p-0.5 transition-opacity ${
+                            cell.verified
+                                ? "text-emerald-500 opacity-100"
+                                : "text-muted-foreground/60 opacity-0 group-hover:opacity-100 hover:text-foreground"
+                        }`}
+                    >
+                        <Check className="h-3 w-3" />
+                    </button>
+                )}
                 <div
-                    className={`w-full min-w-0 ${wrapText ? "whitespace-pre-wrap break-words" : "line-clamp-1"}`}
+                    className={`w-full min-w-0 ${wrapText ? "whitespace-pre-wrap break-words" : "line-clamp-1"} ${onToggleVerify ? "pl-4" : ""}`}
                 >
                     <CellMarkdown
                         text={collapsedDisplay}

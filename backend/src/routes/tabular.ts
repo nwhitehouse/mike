@@ -687,6 +687,63 @@ tabularRouter.post("/:reviewId/clear-cells", requireAuth, async (req, res) => {
     res.status(204).send();
 });
 
+// PATCH /tabular-review/:reviewId/cells/verify
+//
+// feat-023 — toggles a single cell's verified state. Used by the in-table
+// hover ✓ button + drives the "Verified state" filter predicate. Records
+// who toggled it and when so a future audit story can use that without a
+// schema change.
+tabularRouter.patch(
+    "/:reviewId/cells/verify",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { reviewId } = req.params;
+        const { document_id, column_index, verified } = req.body as {
+            document_id?: string;
+            column_index?: number;
+            verified?: boolean;
+        };
+
+        if (
+            typeof document_id !== "string" ||
+            typeof column_index !== "number" ||
+            typeof verified !== "boolean"
+        ) {
+            return void res.status(400).json({
+                detail:
+                    "document_id (string), column_index (number), verified (boolean) are required",
+            });
+        }
+
+        const db = createServerSupabase();
+        const { data: review } = await db
+            .from("tabular_reviews")
+            .select("id, user_id, shared_with, project_id")
+            .eq("id", reviewId)
+            .single();
+        if (!review)
+            return void res.status(404).json({ detail: "Review not found" });
+        const access = await ensureReviewAccess(review, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Review not found" });
+
+        const { error } = await db
+            .from("tabular_cells")
+            .update({
+                verified,
+                verified_at: verified ? new Date().toISOString() : null,
+                verified_by: verified ? userId : null,
+            })
+            .eq("review_id", reviewId)
+            .eq("document_id", document_id)
+            .eq("column_index", column_index);
+        if (error) return void res.status(500).json({ detail: error.message });
+        res.json({ ok: true });
+    },
+);
+
 // PATCH /tabular-review/:reviewId/cells
 // Manually edit a single cell's content (summary / reasoning / flag).
 // Sets status to "done".

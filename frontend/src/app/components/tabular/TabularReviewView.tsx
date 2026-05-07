@@ -26,6 +26,7 @@ import {
     getTabularReviewPeople,
     regenerateTabularCell,
     reprocessTabularColumn,
+    setTabularCellVerified,
     startTabularGenerate,
     updateTabularReview,
     type TabularJobStatus,
@@ -39,6 +40,8 @@ import type {
 } from "../shared/types";
 import { AddColumnModal } from "./AddColumnModal";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
+import { TRFilterBar } from "./TRFilterBar";
+import { computeVisibleDocIds, type TRFilter } from "./trFilterPredicate";
 import { AddDocumentsModal } from "../shared/AddDocumentsModal";
 import { AddProjectDocsModal } from "../shared/AddProjectDocsModal";
 import { PeopleModal } from "../shared/PeopleModal";
@@ -115,6 +118,29 @@ export function TRView({ reviewId, projectId }: Props) {
     const [columnPendingDelete, setColumnPendingDelete] =
         useState<ColumnConfig | null>(null);
     const [deletingColumn, setDeletingColumn] = useState(false);
+
+    // feat-023 — active filter set, persisted per-(review, device) in
+    // localStorage. Restored on mount.
+    const filtersKey = `olava.tabular.filters.${reviewId}`;
+    const [filters, setFilters] = useState<TRFilter[]>([]);
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(filtersKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) setFilters(parsed as TRFilter[]);
+        } catch {
+            /* malformed — start fresh */
+        }
+    }, [filtersKey]);
+    function persistFilters(next: TRFilter[]) {
+        setFilters(next);
+        try {
+            window.localStorage.setItem(filtersKey, JSON.stringify(next));
+        } catch {
+            /* private browsing — state still updates in memory */
+        }
+    }
     const [savingColumn, setSavingColumn] = useState(false);
     const [savingColumnsConfig, setSavingColumnsConfig] = useState(false);
     const [addColOpen, setAddColOpen] = useState(false);
@@ -679,9 +705,46 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     const q = search.toLowerCase();
-    const filteredDocuments = q
+    const searchedDocuments = q
         ? documents.filter((d) => d.filename.toLowerCase().includes(q))
         : documents;
+    // feat-023 — apply active filters on top of the doc-name search.
+    const visibleDocIds = computeVisibleDocIds(
+        searchedDocuments.map((d) => d.id),
+        cells,
+        filters,
+    );
+    const filteredDocuments =
+        filters.length === 0
+            ? searchedDocuments
+            : searchedDocuments.filter((d) => visibleDocIds.has(d.id));
+
+    // feat-023 — verify toggle handler. Optimistic update, then PATCH.
+    async function handleToggleVerifyCell(
+        cell: TabularCell,
+        next: boolean,
+    ): Promise<void> {
+        const previousCells = cells;
+        setCells((prev) =>
+            prev.map((c) =>
+                c.document_id === cell.document_id &&
+                c.column_index === cell.column_index
+                    ? { ...c, verified: next }
+                    : c,
+            ),
+        );
+        try {
+            await setTabularCellVerified(
+                reviewId,
+                cell.document_id,
+                cell.column_index,
+                next,
+            );
+        } catch (err) {
+            console.error("[verify-cell] failed", err);
+            setCells(previousCells);
+        }
+    }
 
     if (docDetailDocId) {
         return (
@@ -966,6 +1029,18 @@ export function TRView({ reviewId, projectId }: Props) {
                     </div>
                 </div>
 
+                {/* feat-023 — filter bar. Hidden when there are no columns
+                    yet (nothing meaningful to filter on). */}
+                {columns.length > 0 && (
+                    <TRFilterBar
+                        columns={columns}
+                        filters={filters}
+                        onChange={persistFilters}
+                        visibleCount={filteredDocuments.length}
+                        totalCount={searchedDocuments.length}
+                    />
+                )}
+
                 {/* Table area */}
                 <div className="flex flex-1 overflow-hidden">
                     {chatOpen && (
@@ -1016,6 +1091,7 @@ export function TRView({ reviewId, projectId }: Props) {
                         wrapText={wrapText}
                         onHideColumn={handleHideColumn}
                         onReprocessColumn={handleReprocessColumn}
+                        onToggleVerifyCell={handleToggleVerifyCell}
                     />
                 </div>
             </div>

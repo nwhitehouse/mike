@@ -51,6 +51,8 @@ interface Props {
     onHideColumn?: (colIndex: number) => void;
     /** feat-021 — re-run only this column's cells via the worker pool. */
     onReprocessColumn?: (colIndex: number) => void | Promise<void>;
+    /** feat-023 — toggle a cell's verified state from the in-table hover button. */
+    onToggleVerifyCell?: (cell: TabularCell, next: boolean) => void;
 }
 
 export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
@@ -75,6 +77,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         onDocumentClick,
         onHideColumn,
         onReprocessColumn,
+        onToggleVerifyCell,
     },
     ref,
 ) {
@@ -484,6 +487,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                                     quote,
                                                 )
                                             }
+                                            onToggleVerify={onToggleVerifyCell}
                                         />
                                     )}
                                 </div>

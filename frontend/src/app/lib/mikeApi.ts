@@ -743,6 +743,28 @@ export async function deleteTabularColumn(
     );
 }
 
+// feat-023 — toggle a cell's verified state. Frontend updates optimistically;
+// the response is just an ack. Access enforced server-side.
+export async function setTabularCellVerified(
+    reviewId: string,
+    documentId: string,
+    columnIndex: number,
+    verified: boolean,
+): Promise<{ ok: true }> {
+    return apiRequest<{ ok: true }>(
+        `/tabular-review/${reviewId}/cells/verify`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                document_id: documentId,
+                column_index: columnIndex,
+                verified,
+            }),
+        },
+    );
+}
+
 export interface TRCitationAnnotation {
     type: "tabular_citation";
     ref: number;
